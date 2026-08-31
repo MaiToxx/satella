@@ -352,6 +352,7 @@ class DirectBackend extends EventEmitter {
 
     // Effets logiciels : le flux d'images prend le relais (streamKeyboard)
     if (SOFT_EFFECTS.has(state.effect)) {
+      this._lastFallback = null; // repartir d'une image complète
       this.kbStreaming = true;
       return;
     }
@@ -359,6 +360,7 @@ class DirectBackend extends EventEmitter {
       // Retour à un effet natif : suspendre le thread de flux puis sortir
       // du mode dynamique avant d'écrire la configuration
       this.kbStreaming = false;
+      this._lastFallback = null;
       await this.pauseWorker();
       try { this.kbQuery(KB_CMD_DYNAMIC_END); } catch { /* déjà sorti */ }
     }
@@ -445,13 +447,17 @@ class DirectBackend extends EventEmitter {
   // thread n'écrit que les blocs modifiés et fusionne les images en retard.
   ensureWorker() {
     if (this._worker || !this.kbInfo) return;
+    // Après un échec, ne pas relancer en boucle : le repli par le canal
+    // principal prend le relais pendant 30 secondes.
+    if (this._workerFailedAt && Date.now() - this._workerFailedAt < 30000) return;
     this._worker = new Worker(path.join(__dirname, 'stream-worker.js'), {
       workerData: { path: this.kbInfo.path },
     });
     this._workerPaused = false;
     this._worker.on('message', (msg) => {
       if (msg.type === 'error') {
-        this.emit('log', 'Flux clavier interrompu : ' + msg.message);
+        this.emit('log', 'Flux clavier (thread) : ' + msg.message + ' ; repli sur le canal principal');
+        this._workerFailedAt = Date.now();
         this.stopWorker();
       } else if (msg.type === 'paused' && this._pauseResolve) {
         this._pauseResolve();
@@ -480,12 +486,6 @@ class DirectBackend extends EventEmitter {
 
   streamKeyboard(colors) {
     if (!this.kb || this._calibTimer) return;
-    this.ensureWorker();
-    if (!this._worker) return;
-    if (this._workerPaused) {
-      this._worker.postMessage({ type: 'resume' });
-      this._workerPaused = false;
-    }
     const mapSize = this.kbMapSize || 128;
     const data = new Uint8Array(3 * mapSize);
     for (const key of Object.keys(this.keyMap)) {
@@ -496,8 +496,50 @@ class DirectBackend extends EventEmitter {
       data[slot + 1] = rgb[1];
       data[slot + 2] = rgb[2];
     }
-    this._worker.postMessage({ type: 'frame', data });
-    this.kbStreaming = true;
+
+    this.ensureWorker();
+    if (this._worker) {
+      if (this._workerPaused) {
+        this._worker.postMessage({ type: 'resume' });
+        this._workerPaused = false;
+      }
+      this._worker.postMessage({ type: 'frame', data });
+      this.kbStreaming = true;
+      return;
+    }
+
+    // Repli : écriture par le canal principal (blocs modifiés uniquement,
+    // avec accusé de réception, limitée à 15 images/s)
+    const now = Date.now();
+    if (now - (this._lastStream || 0) < 66) return;
+    this._lastStream = now;
+    try {
+      let wrote = 0;
+      for (let i = 0; i < data.length; i += 54) {
+        const len = Math.min(54, data.length - i);
+        if (this._lastFallback && this.sameChunk(this._lastFallback, data, i, len)) continue;
+        this.kbQuery(KB_CMD_DYNAMIC, i, len, Array.from(data.slice(i, i + len)), true);
+        wrote++;
+      }
+      // Entretien du mode dynamique quand l'image ne change pas
+      if (!wrote && now - (this._lastFallbackWrite || 0) > 700) {
+        this.kbQuery(KB_CMD_DYNAMIC, 0, 54, Array.from(data.slice(0, 54)), true);
+        wrote = 1;
+      }
+      if (wrote) this._lastFallbackWrite = now;
+      this._lastFallback = data;
+      this.kbStreaming = true;
+    } catch (err) {
+      this.emit('log', 'Flux clavier interrompu : ' + err.message);
+      this.dropKeyboard();
+    }
+  }
+
+  sameChunk(a, b, start, len) {
+    for (let i = start; i < start + len && i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
   }
 
   // ---- Calibration de la carte des touches --------------------------------

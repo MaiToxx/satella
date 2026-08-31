@@ -1,6 +1,6 @@
 {
   "name": "satella-rgb",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Satella — Contrôle des LEDs et macros pour clavier SURMEN GS98 et souris Risophy PC365A",
   "main": "main.js",
   "scripts": {
