@@ -1,0 +1,40 @@
+{
+  "name": "satella-rgb",
+  "version": "1.0.0",
+  "description": "Satella — Contrôle des LEDs et macros pour clavier SURMEN GS98 et souris Risophy PC365A",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.satella.rgb",
+    "productName": "Satella",
+    "npmRebuild": false,
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "ui/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Satella-${version}.${ext}"
+    }
+  },
+  "author": "xavier45letop@gmail.com",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0",
+    "node-hid": "^3.1.0",
+    "openrgb-sdk": "^0.5.1",
+    "uiohook-napi": "^1.5.4"
+  }
+}

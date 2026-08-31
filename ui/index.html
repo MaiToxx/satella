@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Satella</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="brand-name">SATELLA</div>
+        <div class="brand-sub">RGB + MACROS</div>
+      </div>
+      <nav>
+        <button class="nav-btn active" data-page="home">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+          Accueil
+        </button>
+        <button class="nav-btn" data-page="keyboard">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h12"/></svg>
+          Clavier
+        </button>
+        <button class="nav-btn" data-page="mouse">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 1 6 6v6a6 6 0 0 1-12 0V9a6 6 0 0 1 6-6z"/><path d="M12 7v3"/></svg>
+          Souris
+        </button>
+        <button class="nav-btn" data-page="macros">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+          Macros
+        </button>
+        <button class="nav-btn" data-page="devices">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M7 7h10v5a5 5 0 0 1-10 0z"/><path d="M12 17v4"/></svg>
+          Périphériques
+        </button>
+        <button class="nav-btn" data-page="profiles">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+          Profils
+        </button>
+      </nav>
+      <div id="backend-badge"></div>
+    </aside>
+
+    <main id="content">
+      <!-- ACCUEIL -->
+      <section class="page active" id="page-home">
+        <div class="page-head">
+          <div class="eyebrow">Console d'éclairage</div>
+          <h1>Bienvenue dans Satella</h1>
+          <p class="hint">Choisis un périphérique pour régler son éclairage. La couleur que tu appliques devient aussi la couleur de l'interface.</p>
+        </div>
+        <div class="device-cards">
+          <div class="device-card" id="card-keyboard">
+            <div class="device-visual">
+              <svg viewBox="0 0 48 48"><rect x="3" y="14" width="42" height="20" rx="3"/><path d="M8 20h3M14 20h3M20 20h3M26 20h3M32 20h3M38 20h2M8 25h3M14 25h3M20 25h3M26 25h3M32 25h8M10 29h28"/></svg>
+            </div>
+            <h2>SURMEN GS98</h2>
+            <div class="card-sub">Clavier mécanique · 98 touches · RGB par touche</div>
+            <div class="mini-preview" id="home-kb-preview"></div>
+            <div class="card-open">OUVRIR LA VUE CLAVIER</div>
+          </div>
+          <div class="device-card" id="card-mouse">
+            <div class="device-visual">
+              <svg viewBox="0 0 48 48"><path d="M24 5a12 12 0 0 1 12 12v14a12 12 0 0 1-24 0V17A12 12 0 0 1 24 5z"/><path d="M24 12v6M24 5v7"/></svg>
+            </div>
+            <h2>Risophy PC365A</h2>
+            <div class="card-sub">Souris gaming · 5 zones RGB</div>
+            <div class="mini-preview" id="home-mouse-preview"></div>
+            <div class="card-open">OUVRIR LA VUE SOURIS</div>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:26px">
+          <span class="muted" style="font-family:var(--font-mono);font-size:11.5px">Version <span id="app-version">?</span></span>
+          <button id="update-check" class="btn small">Vérifier les mises à jour</button>
+          <span class="muted" id="update-result" style="font-size:12.5px"></span>
+        </div>
+      </section>
+
+      <!-- CLAVIER -->
+      <section class="page" id="page-keyboard">
+        <div class="page-head">
+          <div class="eyebrow">Éclairage</div>
+          <h1>Clavier SURMEN GS98</h1>
+          <p class="hint">Clique sur une touche pour la sélectionner, glisse pour une sélection rectangle, Ctrl+clic pour ajouter ou retirer.</p>
+        </div>
+        <div id="kb-wrap"><div id="kb-board"></div><div id="kb-marquee" hidden></div></div>
+        <div class="toolbar">
+          <div class="tool-group">
+            <label>Effet</label>
+            <div class="seg" id="kb-effects"></div>
+          </div>
+          <div class="tool-group">
+            <label>Couleur</label>
+            <input type="color" id="kb-color" value="#00a8ff">
+            <div class="swatches" id="kb-swatches"></div>
+            <label id="kb-color2-label">Couleur 2 (dégradé)</label>
+            <input type="color" id="kb-color2" value="#ff00d4">
+          </div>
+          <div class="tool-group">
+            <label>Luminosité <span class="val" id="kb-bright-val">100%</span></label>
+            <input type="range" id="kb-bright" min="0" max="100" value="100">
+            <label>Vitesse <span class="val" id="kb-speed-val">50%</span></label>
+            <input type="range" id="kb-speed" min="0" max="100" value="50">
+          </div>
+          <div class="tool-group" id="kb-dir-group">
+            <label>Direction</label>
+            <select id="kb-dir">
+              <option value="lr">Gauche vers droite</option>
+              <option value="rl">Droite vers gauche</option>
+              <option value="tb">Haut vers bas</option>
+              <option value="bt">Bas vers haut</option>
+            </select>
+          </div>
+          <div class="tool-group">
+            <label>Sélection <span class="val"><span id="kb-sel-count">0</span> touche(s)</span></label>
+            <div class="btn-row">
+              <button id="kb-apply" class="btn primary">Appliquer la couleur</button>
+              <button id="kb-select-all" class="btn">Tout</button>
+              <button id="kb-clear-sel" class="btn">Rien</button>
+              <button id="kb-reset" class="btn danger">Réinitialiser</button>
+            </div>
+            <label class="check"><input type="checkbox" id="kb-paint"> Mode pinceau : cliquer colore directement</label>
+            <button id="kb-calibrate" class="btn small">Calibrer la carte des touches</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SOURIS -->
+      <section class="page" id="page-mouse">
+        <div class="page-head">
+          <div class="eyebrow">Éclairage</div>
+          <h1>Souris Risophy PC365A</h1>
+          <p class="hint">Clique sur une zone pour la sélectionner. La souris applique une seule couleur à l'ensemble de ses LEDs (limite matérielle) : la première zone colorée fait référence.</p>
+        </div>
+        <div class="mouse-flex">
+          <div id="mouse-svg-wrap"></div>
+          <div class="toolbar vertical">
+            <div class="tool-group">
+              <label>Effet</label>
+              <div class="seg" id="mouse-effects"></div>
+            </div>
+            <div class="tool-group">
+              <label>Couleur</label>
+              <input type="color" id="mouse-color" value="#00a8ff">
+              <div class="swatches" id="mouse-swatches"></div>
+            </div>
+            <div class="tool-group">
+              <label>Luminosité <span class="val" id="mouse-bright-val">100%</span></label>
+              <input type="range" id="mouse-bright" min="0" max="100" value="100">
+              <label>Vitesse <span class="val" id="mouse-speed-val">50%</span></label>
+              <input type="range" id="mouse-speed" min="0" max="100" value="50">
+            </div>
+            <div class="tool-group">
+              <label>Zone sélectionnée <span class="val" id="mouse-sel-label">aucune</span></label>
+              <div class="btn-row">
+                <button id="mouse-apply" class="btn primary">Appliquer la couleur</button>
+                <button id="mouse-reset" class="btn danger">Réinitialiser</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MACROS -->
+      <section class="page" id="page-macros">
+        <div class="page-head">
+          <div class="eyebrow">Automatisation</div>
+          <div class="head-row">
+            <h1>Macros</h1>
+            <button id="macro-new" class="btn primary">Nouvelle macro</button>
+          </div>
+        </div>
+        <div class="macro-layout">
+          <div id="macro-list" class="panel"></div>
+          <div id="macro-editor" class="panel">
+            <p class="muted center">Sélectionne une macro ou crée la première.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- PERIPHERIQUES -->
+      <section class="page" id="page-devices">
+        <div class="page-head">
+          <div class="eyebrow">Matériel</div>
+          <div class="head-row">
+            <h1>Périphériques</h1>
+            <button id="dev-refresh" class="btn">Actualiser</button>
+          </div>
+        </div>
+        <div class="panel" id="direct-panel"></div>
+        <details style="margin-top:14px">
+          <summary>Option avancée : moteur OpenRGB (secours)</summary>
+          <div class="panel" id="openrgb-panel" style="margin-top:8px"></div>
+        </details>
+        <h2>Diagnostic</h2>
+        <div class="panel" id="diag-panel">
+          <p class="muted" style="margin-bottom:10px">
+            Envois de test directs au matériel, sans passer par les réglages.
+            Observe le périphérique après chaque clic et note ce qui change.
+          </p>
+          <div class="tool-group" style="border:none;padding:0 0 12px">
+            <label>Clavier : couleur statique pleine luminosité</label>
+            <div class="btn-row">
+              <button class="btn diag-kb" data-rgb="255,0,51">Rouge</button>
+              <button class="btn diag-kb" data-rgb="0,255,80">Vert</button>
+              <button class="btn diag-kb" data-rgb="0,120,255">Bleu</button>
+              <button class="btn diag-kb" data-rgb="255,255,255">Blanc</button>
+            </div>
+          </div>
+          <div class="tool-group" style="border:none;padding:0">
+            <label>Souris : valeur de mode brute (couleur rouge, luminosité max)</label>
+            <div class="btn-row" id="diag-mouse-modes"></div>
+          </div>
+          <p class="muted" id="diag-result" style="margin-top:10px"></p>
+        </div>
+
+        <h2>Bus USB</h2>
+        <div class="panel" id="hid-list"></div>
+      </section>
+
+      <!-- PROFILS -->
+      <section class="page" id="page-profiles">
+        <div class="page-head">
+          <div class="eyebrow">Sauvegardes</div>
+          <h1>Profils</h1>
+          <p class="hint">Un profil enregistre l'éclairage complet et toutes les macros.</p>
+        </div>
+        <div class="btn-row" style="margin-bottom:16px">
+          <input type="text" id="profile-name" placeholder="Nom du profil">
+          <button id="profile-save" class="btn primary">Sauvegarder le profil actuel</button>
+        </div>
+        <div class="panel" id="profile-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modale d'edition d'etape -->
+  <div id="modal-backdrop" hidden>
+    <div id="modal" class="panel"></div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="../src/shared/layout.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
