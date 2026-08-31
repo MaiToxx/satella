@@ -396,6 +396,27 @@ details > summary:hover { color: var(--text); }
 .profile-row .p-apps-input { flex: 1; max-width: 420px; font-family: var(--font-mono); font-size: 12px; }
 .profile-row .p-date { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 
+/* ======================= Expansion de texte et turbo ====================== */
+.snippet-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.snippet-row:last-child { border-bottom: none; }
+.snippet-row .sn-abbr { width: 130px; font-family: var(--font-mono); font-size: 12.5px; }
+.snippet-row .sn-text { flex: 1; resize: vertical; min-height: 34px; }
+.snippet-row .switch, .snippet-row .icon-btn { margin-top: 5px; }
+
+.turbo-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 0; border-bottom: 1px solid var(--line);
+}
+.turbo-row:last-child { border-bottom: none; }
+.turbo-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--faint);
+}
+.turbo-dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse 1s infinite; }
+
 /* =============================== Optimiseur =============================== */
 .mem-figure { padding: 4px 0; }
 .mem-value {

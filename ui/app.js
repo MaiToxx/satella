@@ -926,42 +926,49 @@ window.satella.macros.onKeyActivity(({ key }) => {
 });
 
 /* ---- Capture du déclencheur ---- */
-function setupTriggerCapture(inputEl, macro) {
+// Traduit un événement clavier du navigateur en accélérateur Electron
+function acceleratorFromEvent(e) {
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return null;
+  const parts = [];
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Super');
+  const codeMap = {
+    Space: 'Space', Enter: 'Return', NumpadEnter: 'Return', Escape: 'Esc',
+    Backspace: 'Backspace', Tab: 'Tab', CapsLock: 'Capslock',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End',
+    PageUp: 'PageUp', PageDown: 'PageDown', PrintScreen: 'PrintScreen',
+    NumLock: 'Numlock', ScrollLock: 'Scrolllock',
+    Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'",
+    BracketLeft: '[', BracketRight: ']', Backslash: '\\', Backquote: '`',
+    Minus: '-', Equal: '=', IntlBackslash: '\\',
+    NumpadMultiply: 'nummult', NumpadDivide: 'numdiv', NumpadAdd: 'numadd',
+    NumpadSubtract: 'numsub', NumpadDecimal: 'numdec',
+  };
+  let key = null;
+  if (/^Key([A-Z])$/.test(e.code)) key = e.code.slice(3);
+  else if (/^Digit(\d)$/.test(e.code)) key = e.code.slice(5);
+  else if (/^F\d{1,2}$/.test(e.code)) key = e.code;
+  else if (/^Numpad(\d)$/.test(e.code)) key = 'num' + e.code.slice(6);
+  else if (codeMap[e.code]) key = codeMap[e.code];
+  if (!key) return null;
+  parts.push(key);
+  return parts.join('+');
+}
+
+// Champ de capture générique : focus, pression d'un raccourci, rappel
+function captureAccelerator(inputEl, getCurrent, onAccel) {
   inputEl.addEventListener('focus', () => {
     inputEl.classList.add('capturing');
     inputEl.value = 'Presse un raccourci…';
     const onKey = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
-      const parts = [];
-      if (e.ctrlKey) parts.push('Ctrl');
-      if (e.altKey) parts.push('Alt');
-      if (e.shiftKey) parts.push('Shift');
-      if (e.metaKey) parts.push('Super');
-      const codeMap = {
-        Space: 'Space', Enter: 'Return', NumpadEnter: 'Return', Escape: 'Esc',
-        Backspace: 'Backspace', Tab: 'Tab', CapsLock: 'Capslock',
-        ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
-        Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End',
-        PageUp: 'PageUp', PageDown: 'PageDown', PrintScreen: 'PrintScreen',
-        NumLock: 'Numlock', ScrollLock: 'Scrolllock',
-        Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'",
-        BracketLeft: '[', BracketRight: ']', Backslash: '\\', Backquote: '`',
-        Minus: '-', Equal: '=', IntlBackslash: '\\',
-        NumpadMultiply: 'nummult', NumpadDivide: 'numdiv', NumpadAdd: 'numadd',
-        NumpadSubtract: 'numsub', NumpadDecimal: 'numdec',
-      };
-      let key = null;
-      if (/^Key([A-Z])$/.test(e.code)) key = e.code.slice(3);
-      else if (/^Digit(\d)$/.test(e.code)) key = e.code.slice(5);
-      else if (/^F\d{1,2}$/.test(e.code)) key = e.code;
-      else if (/^Numpad(\d)$/.test(e.code)) key = 'num' + e.code.slice(6);
-      else if (codeMap[e.code]) key = codeMap[e.code];
-      if (!key) return;
-      parts.push(key);
-      const accel = parts.join('+');
-      macro.trigger = { type: 'hotkey', accelerator: accel };
+      const accel = acceleratorFromEvent(e);
+      if (!accel) return;
+      onAccel(accel);
       inputEl.value = accel;
       inputEl.blur();
     };
@@ -969,9 +976,17 @@ function setupTriggerCapture(inputEl, macro) {
     inputEl.addEventListener('blur', () => {
       inputEl.classList.remove('capturing');
       inputEl.removeEventListener('keydown', onKey);
-      inputEl.value = (macro.trigger && macro.trigger.accelerator) || '';
+      inputEl.value = getCurrent() || '';
     }, { once: true });
   });
+}
+
+function setupTriggerCapture(inputEl, macro) {
+  captureAccelerator(
+    inputEl,
+    () => macro.trigger && macro.trigger.accelerator,
+    (accel) => { macro.trigger = { type: 'hotkey', accelerator: accel }; }
+  );
 }
 
 /* ---- Enregistreur ---- */
@@ -1194,6 +1209,146 @@ $('#profile-save').addEventListener('click', async () => {
   toast(`Profil « ${name} » sauvegardé.`);
 });
 
+/* ================= Expansion de texte ================= */
+let SNIPPETS = [];
+
+function saveSnippets() {
+  window.satella.snippets.set(SNIPPETS);
+}
+
+function renderSnippets() {
+  const cont = $('#snippet-list');
+  cont.innerHTML = '';
+  if (!SNIPPETS.length) {
+    cont.innerHTML = '<p class="muted">Aucune abréviation pour l\'instant.</p>';
+    return;
+  }
+  SNIPPETS.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'snippet-row';
+    row.innerHTML = `
+      <input type="text" class="sn-abbr" placeholder=";abrev" value="${(s.abbr || '').replace(/"/g, '&quot;')}">
+      <textarea class="sn-text" rows="1" placeholder="Texte de remplacement">${s.text || ''}</textarea>
+      <label class="switch"><input type="checkbox" class="sn-on" ${s.enabled ? 'checked' : ''}><span></span></label>
+      <button class="icon-btn sn-del" title="Supprimer">${svg('close')}</button>`;
+    row.querySelector('.sn-abbr').addEventListener('change', (e) => {
+      SNIPPETS[i].abbr = e.target.value.trim();
+      saveSnippets();
+    });
+    row.querySelector('.sn-text').addEventListener('change', (e) => {
+      SNIPPETS[i].text = e.target.value;
+      saveSnippets();
+    });
+    row.querySelector('.sn-on').addEventListener('change', (e) => {
+      SNIPPETS[i].enabled = e.target.checked;
+      saveSnippets();
+    });
+    row.querySelector('.sn-del').addEventListener('click', () => {
+      SNIPPETS.splice(i, 1);
+      saveSnippets();
+      renderSnippets();
+    });
+    cont.appendChild(row);
+  });
+}
+
+$('#snippet-add').addEventListener('click', () => {
+  SNIPPETS.push({ id: uid(), abbr: '', text: '', enabled: true });
+  renderSnippets();
+  const inputs = $$('#snippet-list .sn-abbr');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+/* ================= Mode turbo ================= */
+let TURBOS = [];
+const TURBO_TARGETS = [
+  ['mouse:left', 'Clic gauche'],
+  ['mouse:right', 'Clic droit'],
+  ['mouse:middle', 'Clic molette'],
+  ['key', 'Touche...'],
+];
+
+function saveTurbos() {
+  window.satella.turbos.set(JSON.parse(JSON.stringify(TURBOS)));
+}
+
+function turboTargetValue(t) {
+  return t.target && t.target.type === 'key' ? 'key' : 'mouse:' + ((t.target && t.target.button) || 'left');
+}
+
+function renderTurbos() {
+  const cont = $('#turbo-list');
+  cont.innerHTML = '';
+  if (!TURBOS.length) {
+    cont.innerHTML = '<p class="muted">Aucun turbo pour l\'instant.</p>';
+    return;
+  }
+  TURBOS.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'turbo-row';
+    row.dataset.id = t.id;
+    const targetOpts = TURBO_TARGETS.map(([v, l]) =>
+      `<option value="${v}" ${turboTargetValue(t) === v ? 'selected' : ''}>${l}</option>`).join('');
+    const keyOpts = KEY_NAMES.map((k) =>
+      `<option value="${k}" ${t.target && t.target.key === k ? 'selected' : ''}>${keyLabel(k)}</option>`).join('');
+    row.innerHTML = `
+      <span class="turbo-dot" title="Actif quand allumé"></span>
+      <select class="tb-target">${targetOpts}</select>
+      <select class="tb-key" style="display:${turboTargetValue(t) === 'key' ? '' : 'none'}">${keyOpts}</select>
+      <label class="muted" style="font-size:12px">Cadence</label>
+      <input type="range" class="tb-cps" min="1" max="50" value="${t.cps || 10}" style="width:110px">
+      <span class="muted tb-cps-val" style="font-family:var(--font-mono);font-size:12px">${t.cps || 10}/s</span>
+      <input type="text" readonly class="trigger-input tb-accel" style="min-width:130px"
+        value="${t.accelerator || ''}" placeholder="Raccourci...">
+      <label class="switch"><input type="checkbox" class="tb-on" ${t.enabled ? 'checked' : ''}><span></span></label>
+      <button class="icon-btn tb-del" title="Supprimer">${svg('close')}</button>`;
+
+    row.querySelector('.tb-target').addEventListener('change', (e) => {
+      const v = e.target.value;
+      TURBOS[i].target = v === 'key'
+        ? { type: 'key', key: (TURBOS[i].target && TURBOS[i].target.key) || 'space' }
+        : { type: 'mouse', button: v.split(':')[1] };
+      saveTurbos();
+      renderTurbos();
+    });
+    row.querySelector('.tb-key').addEventListener('change', (e) => {
+      TURBOS[i].target = { type: 'key', key: e.target.value };
+      saveTurbos();
+    });
+    row.querySelector('.tb-cps').addEventListener('input', (e) => {
+      row.querySelector('.tb-cps-val').textContent = e.target.value + '/s';
+    });
+    row.querySelector('.tb-cps').addEventListener('change', (e) => {
+      TURBOS[i].cps = +e.target.value;
+      saveTurbos();
+    });
+    captureAccelerator(
+      row.querySelector('.tb-accel'),
+      () => TURBOS[i].accelerator,
+      (accel) => { TURBOS[i].accelerator = accel; saveTurbos(); }
+    );
+    row.querySelector('.tb-on').addEventListener('change', (e) => {
+      TURBOS[i].enabled = e.target.checked;
+      saveTurbos();
+    });
+    row.querySelector('.tb-del').addEventListener('click', () => {
+      TURBOS.splice(i, 1);
+      saveTurbos();
+      renderTurbos();
+    });
+    cont.appendChild(row);
+  });
+}
+
+$('#turbo-add').addEventListener('click', () => {
+  TURBOS.push({
+    id: uid(), target: { type: 'mouse', button: 'left' },
+    cps: 10, accelerator: '', enabled: true,
+  });
+  saveTurbos();
+  renderTurbos();
+});
+
 /* ================= Optimiseur mémoire ================= */
 const GO = 1073741824;
 let memTimer = null;
@@ -1332,6 +1487,10 @@ async function init() {
   CAPS = data.capabilities;
   $('#app-version').textContent = data.version || '?';
   renderSettings(data.settings || SETTINGS);
+  SNIPPETS = data.snippets || [];
+  TURBOS = data.turbos || [];
+  renderSnippets();
+  renderTurbos();
   if (!data.memoryAvailable) {
     $('#mem-panel').innerHTML = '<p class="muted">Optimiseur indisponible sur ce système.</p>';
   }
@@ -1362,6 +1521,11 @@ async function init() {
   });
   window.satella.macros.onPlayError(({ message }) => toast('Erreur macro : ' + message, 4000));
   window.satella.settings.onChanged(renderSettings);
+  window.satella.turbos.onState(({ id, running }) => {
+    const row = document.querySelector(`.turbo-row[data-id="${id}"]`);
+    if (row) row.querySelector('.turbo-dot').classList.toggle('on', running);
+    if (running) toast('Turbo activé. Le même raccourci l\'arrête.');
+  });
   window.satella.profiles.onAutoApplied(({ name, exe, ledState, macros: m }) => {
     STATE = ledState;
     MACROS = m;

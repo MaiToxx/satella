@@ -49,6 +49,17 @@ contextBridge.exposeInMainWorld('satella', {
     onKeyActivity: on('macro:key-activity'),
   },
 
+  snippets: {
+    get: () => ipcRenderer.invoke('snippets:get'),
+    set: (list) => ipcRenderer.invoke('snippets:set', list),
+  },
+
+  turbos: {
+    get: () => ipcRenderer.invoke('turbos:get'),
+    set: (list) => ipcRenderer.invoke('turbos:set', list),
+    onState: on('turbo:state'),
+  },
+
   memory: {
     status: () => ipcRenderer.invoke('memory:status'),
     optimize: () => ipcRenderer.invoke('memory:optimize'),

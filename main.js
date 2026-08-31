@@ -19,6 +19,7 @@ const memory = require('./src/system/memory');
 const foreground = require('./src/system/foreground');
 const idle = require('./src/system/idle');
 const { MacroEngine, uiohookAvailable } = require('./src/macros/engine');
+const { SnippetEngine } = require('./src/macros/snippets');
 const input = require('./src/macros/input');
 const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
@@ -26,8 +27,10 @@ const layout = require('./src/shared/layout');
 let win = null;
 let tray = null;
 let quitting = false;
-let store, ledEngine, direct, macroEngine;
+let store, ledEngine, direct, macroEngine, snippetEngine;
 let macros = [];
+let turbos = [];
+const turboRunning = new Map(); // id -> intervalle actif
 let calibrating = false;
 let hookDebug = false;
 let detectTimer = null;
@@ -139,6 +142,8 @@ function setupEngines() {
   ledEngine = new LedEngine();
   direct = new DirectBackend();
   macroEngine = new MacroEngine({ globalShortcut });
+  snippetEngine = new SnippetEngine();
+  turbos = store.read('turbos', []);
 
   // État LED sauvegardé
   ledEngine.loadState(store.read('led-state', null));
@@ -202,6 +207,11 @@ function setupEngines() {
       pendingLCtrl = null;
     }
     deliverKey(key);
+    // Expansion de texte : uniquement la frappe naturelle de l'utilisateur
+    if (settings.macrosEnabled && !macroEngine.recording && !calibrating
+      && turboRunning.size === 0) {
+      snippetEngine.feed(key);
+    }
   });
   macroEngine.on('record-event', (step) => send('macro:record-event', step));
   macroEngine.on('play-state', (s) => send('macro:play-state', s));
@@ -230,13 +240,8 @@ function applySettings() {
     direct.dispose();
   }
 
-  // --- Macros ---
-  if (settings.macrosEnabled) {
-    macroEngine.setMacros(macros);
-  } else {
-    macroEngine.stop();
-    globalShortcut.unregisterAll();
-  }
+  // --- Macros, turbos et expansion de texte ---
+  refreshShortcuts();
 
   // --- Lancement avec Windows ---
   // En développement, l'entrée pointerait vers electron.exe : on ne touche
@@ -283,6 +288,54 @@ function applySettings() {
   send('settings:changed', settings);
 }
 
+// Raccourcis globaux : macros puis turbos (setMacros efface tout avant de
+// réenregistrer, les turbos doivent donc toujours passer après).
+function refreshShortcuts() {
+  if (settings.macrosEnabled) {
+    macroEngine.setMacros(macros);
+    for (const t of turbos) {
+      if (!t.enabled || !t.accelerator) continue;
+      try {
+        globalShortcut.register(t.accelerator, () => toggleTurbo(t.id));
+      } catch { /* accélérateur invalide */ }
+    }
+    snippetEngine.setSnippets(store.read('snippets', []));
+  } else {
+    macroEngine.stop();
+    stopAllTurbos();
+    globalShortcut.unregisterAll();
+    snippetEngine.setSnippets([]);
+  }
+}
+
+// Mode turbo : le raccourci démarre ou coupe la répétition automatique
+function toggleTurbo(id) {
+  const t = turbos.find((x) => x.id === id);
+  if (!t) return;
+  if (turboRunning.has(id)) {
+    clearInterval(turboRunning.get(id));
+    turboRunning.delete(id);
+    send('turbo:state', { id, running: false });
+    return;
+  }
+  if (!input.available) return;
+  const cps = Math.max(1, Math.min(50, t.cps || 10));
+  const target = t.target || { type: 'mouse', button: 'left' };
+  const fire = target.type === 'key'
+    ? () => { try { input.keyTap(target.key); } catch { /* ignore */ } }
+    : () => { try { input.mouseClick(target.button || 'left', 1); } catch { /* ignore */ } };
+  turboRunning.set(id, setInterval(fire, Math.round(1000 / cps)));
+  send('turbo:state', { id, running: true });
+}
+
+function stopAllTurbos() {
+  for (const [id, iv] of turboRunning) {
+    clearInterval(iv);
+    send('turbo:state', { id, running: false });
+  }
+  turboRunning.clear();
+}
+
 // Réapplique l'état d'éclairage courant au matériel (après une extinction)
 function reapplyLeds() {
   direct._lastKbSig = '';
@@ -296,7 +349,7 @@ function applyProfile(p) {
   ledEngine.loadState(p.ledState);
   macros = p.macros || [];
   store.write('macros', macros);
-  if (settings.macrosEnabled) macroEngine.setMacros(macros);
+  refreshShortcuts();
 }
 
 // Bascule de profil selon l'application au premier plan
@@ -334,7 +387,7 @@ function idleTick() {
 function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
   const forLeds = settings.ledsEnabled && (eff === 'reactive' || eff === 'ripple');
-  const forMacros = settings.macrosEnabled && macroEngine.recording;
+  const forMacros = settings.macrosEnabled && (macroEngine.recording || snippetEngine.active);
   const needed = forLeds || forMacros || calibrating || hookDebug;
   if (needed) macroEngine.startActivityFeed();
   else macroEngine.stopActivityFeed();
@@ -393,6 +446,8 @@ function setupIpc() {
     layout,
     ledState: ledEngine.state,
     macros,
+    snippets: store.read('snippets', []),
+    turbos,
     direct: direct.status(),
     hid: hid.listDevices(),
     capabilities: {
@@ -464,14 +519,33 @@ function setupIpc() {
     if (idx >= 0) macros[idx] = macro;
     else macros.push(macro);
     store.write('macros', macros);
-    if (settings.macrosEnabled) macroEngine.setMacros(macros);
+    refreshShortcuts();
     return macros;
   });
   ipcMain.handle('macros:remove', (e, id) => {
     macros = macros.filter((m) => m.id !== id);
     store.write('macros', macros);
-    if (settings.macrosEnabled) macroEngine.setMacros(macros);
+    refreshShortcuts();
     return macros;
+  });
+
+  // ---- Expansion de texte ----
+  ipcMain.handle('snippets:get', () => store.read('snippets', []));
+  ipcMain.handle('snippets:set', (e, list) => {
+    store.write('snippets', list || []);
+    if (settings.macrosEnabled) snippetEngine.setSnippets(list);
+    updateHookNeed();
+    return list;
+  });
+
+  // ---- Mode turbo ----
+  ipcMain.handle('turbos:get', () => turbos);
+  ipcMain.handle('turbos:set', (e, list) => {
+    turbos = list || [];
+    store.write('turbos', turbos);
+    stopAllTurbos();
+    refreshShortcuts();
+    return turbos;
   });
   ipcMain.handle('macros:play', (e, id) => macroEngine.play(id));
   ipcMain.handle('macros:stop', (e, id) => macroEngine.stop(id));
@@ -595,6 +669,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => { quitting = true; });
 
 app.on('will-quit', () => {
+  stopAllTurbos();
   globalShortcut.unregisterAll();
   if (macroEngine) macroEngine.dispose();
   if (direct) direct.dispose();
