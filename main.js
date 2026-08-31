@@ -151,11 +151,31 @@ function setupEngines() {
     if (!direct.kb || !direct.mouse) direct.detect();
   }, 5000);
 
-  // Effet réactif : frappe réelle -> touche allumée
-  macroEngine.on('key-activity', ({ key, down }) => {
-    if (!down || !key) return;
+  // Effet réactif : frappe réelle -> touche allumée.
+  // Cas AltGr : Windows synthétise un appui Ctrl gauche juste avant Alt
+  // droit. On retient Ctrl gauche 30 ms ; si Alt droit suit, c'est le
+  // doublon synthétique et on le jette (sinon l'onde de choc part de
+  // l'emplacement de Ctrl gauche à chaque AltGr).
+  let pendingLCtrl = null;
+  const deliverKey = (key) => {
     ledEngine.keyActivity(key);
     send('macro:key-activity', { key });
+  };
+  macroEngine.on('key-activity', ({ key, down }) => {
+    if (!down || !key) return;
+    if (key === 'lctrl') {
+      clearTimeout(pendingLCtrl);
+      pendingLCtrl = setTimeout(() => {
+        pendingLCtrl = null;
+        deliverKey('lctrl');
+      }, 30);
+      return;
+    }
+    if (key === 'ralt' && pendingLCtrl) {
+      clearTimeout(pendingLCtrl);
+      pendingLCtrl = null;
+    }
+    deliverKey(key);
   });
   macroEngine.on('record-event', (step) => send('macro:record-event', step));
   macroEngine.on('play-state', (s) => send('macro:play-state', s));
