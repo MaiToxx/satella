@@ -386,11 +386,14 @@ details > summary:hover { color: var(--text); }
 
 /* ================================ Profils ================================= */
 .profile-row {
-  display: flex; align-items: center; gap: 12px; padding: 12px 6px;
+  padding: 12px 6px;
   border-bottom: 1px solid var(--line);
 }
 .profile-row:last-child { border-bottom: none; }
-.profile-row .p-name { flex: 1; font-weight: 600; }
+.profile-row .p-main { display: flex; align-items: center; gap: 12px; }
+.profile-row .p-name { flex: 1; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.profile-row .p-apps { display: flex; gap: 8px; margin-top: 8px; }
+.profile-row .p-apps-input { flex: 1; max-width: 420px; font-family: var(--font-mono); font-size: 12px; }
 .profile-row .p-date { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 
 /* =============================== Optimiseur =============================== */

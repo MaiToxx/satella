@@ -16,6 +16,8 @@ const { LedEngine } = require('./src/led/engine');
 const { DirectBackend, SOFT_EFFECTS } = require('./src/led/direct');
 const hid = require('./src/led/hid');
 const memory = require('./src/system/memory');
+const foreground = require('./src/system/foreground');
+const idle = require('./src/system/idle');
 const { MacroEngine, uiohookAvailable } = require('./src/macros/engine');
 const input = require('./src/macros/input');
 const keys = require('./src/macros/keys');
@@ -30,6 +32,11 @@ let calibrating = false;
 let hookDebug = false;
 let detectTimer = null;
 let autoOptTimer = null;
+let fgTimer = null;
+let idleTimer = null;
+let idleDimmed = false;
+let lastFgExe = '';
+let autoProfileName = null;
 
 // Modules activables (page Paramètres) : couper un module libère ses
 // ressources (timers, écoute clavier, poignées USB).
@@ -40,6 +47,10 @@ const DEFAULT_SETTINGS = {
   autoOptimizeThreshold: 80,
   launchAtStartup: false,
   startMinimized: true,
+  appProfiles: true,
+  idleOff: false,
+  idleMinutes: 10,
+  autoCheckUpdates: true,
 };
 
 // Démarrage silencieux : Windows relance Satella avec ce drapeau
@@ -143,7 +154,8 @@ function setupEngines() {
     if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
       win.webContents.send('led:frame', frame);
     }
-    if (settings.ledsEnabled && direct.kb && SOFT_EFFECTS.has(ledEngine.state.keyboard.effect)) {
+    if (settings.ledsEnabled && !idleDimmed && direct.kb
+      && SOFT_EFFECTS.has(ledEngine.state.keyboard.effect)) {
       direct.streamKeyboard(frame.keyboard);
     }
   });
@@ -250,8 +262,71 @@ function applySettings() {
     }, 60000);
   }
 
+  // --- Profils par application ---
+  clearInterval(fgTimer);
+  fgTimer = null;
+  if (settings.appProfiles && foreground.available()) {
+    fgTimer = setInterval(foregroundTick, 3000);
+  }
+
+  // --- Extinction automatique des LED ---
+  clearInterval(idleTimer);
+  idleTimer = null;
+  if (settings.idleOff && settings.ledsEnabled && idle.available()) {
+    idleTimer = setInterval(idleTick, 2000);
+  } else if (idleDimmed) {
+    idleDimmed = false;
+    reapplyLeds();
+  }
+
   updateHookNeed();
   send('settings:changed', settings);
+}
+
+// Réapplique l'état d'éclairage courant au matériel (après une extinction)
+function reapplyLeds() {
+  direct._lastKbSig = '';
+  direct._lastMouseSig = '';
+  direct.applyKeyboard(ledEngine.state.keyboard);
+  direct.applyMouse(ledEngine.state.mouse);
+}
+
+// Applique un profil (chargement manuel ou bascule automatique)
+function applyProfile(p) {
+  ledEngine.loadState(p.ledState);
+  macros = p.macros || [];
+  store.write('macros', macros);
+  if (settings.macrosEnabled) macroEngine.setMacros(macros);
+}
+
+// Bascule de profil selon l'application au premier plan
+function foregroundTick() {
+  const exe = foreground.currentExe();
+  if (!exe || exe === lastFgExe) return;
+  if (exe === 'satella.exe' || exe === 'electron.exe') return; // pas de bascule en réglant Satella
+  lastFgExe = exe;
+  const profiles = store.read('profiles', []);
+  const match = profiles.find((p) => (p.apps || []).includes(exe));
+  const target = match || profiles.find((p) => p.isDefault);
+  if (!target || target.name === autoProfileName) return;
+  autoProfileName = target.name;
+  applyProfile(target);
+  send('profiles:autoApplied', { name: target.name, exe: match ? exe : null, ledState: ledEngine.state, macros });
+}
+
+// Extinction des LED après inactivité, rallumage à la première activité
+function idleTick() {
+  const ms = idle.idleMs();
+  if (ms === null) return;
+  const threshold = Math.max(1, settings.idleMinutes) * 60000;
+  if (!idleDimmed && ms >= threshold) {
+    idleDimmed = true;
+    direct.applyKeyboard({ ...ledEngine.state.keyboard, effect: 'off' });
+    direct.applyMouse({ ...ledEngine.state.mouse, effect: 'off' });
+  } else if (idleDimmed && ms < threshold) {
+    idleDimmed = false;
+    reapplyLeds();
+  }
 }
 
 // L'écoute clavier globale (uiohook) ne tourne que lorsqu'elle sert :
@@ -434,7 +509,15 @@ function setupIpc() {
   ipcMain.handle('profiles:save', (e, name) => {
     const profiles = store.read('profiles', []);
     const idx = profiles.findIndex((p) => p.name === name);
-    const profile = { name, savedAt: new Date().toISOString(), ledState: ledEngine.state, macros };
+    const previous = idx >= 0 ? profiles[idx] : {};
+    const profile = {
+      name,
+      savedAt: new Date().toISOString(),
+      ledState: ledEngine.state,
+      macros,
+      apps: previous.apps || [],
+      isDefault: !!previous.isDefault,
+    };
     if (idx >= 0) profiles[idx] = profile;
     else profiles.push(profile);
     store.write('profiles', profiles);
@@ -444,11 +527,25 @@ function setupIpc() {
     const profiles = store.read('profiles', []);
     const p = profiles.find((x) => x.name === name);
     if (!p) return null;
-    ledEngine.loadState(p.ledState);
-    macros = p.macros || [];
-    store.write('macros', macros);
-    macroEngine.setMacros(macros);
+    applyProfile(p);
+    autoProfileName = p.name; // pas de re-bascule immédiate par-dessus
     return { ledState: ledEngine.state, macros };
+  });
+  // Applications liées et profil par défaut (bascule automatique)
+  ipcMain.handle('profiles:setMeta', (e, name, meta) => {
+    const profiles = store.read('profiles', []);
+    const p = profiles.find((x) => x.name === name);
+    if (!p) return profiles;
+    if (meta.apps !== undefined) {
+      p.apps = meta.apps.map((a) => String(a).trim().toLowerCase()).filter(Boolean);
+    }
+    if (meta.isDefault !== undefined) {
+      profiles.forEach((x) => { x.isDefault = false; });
+      p.isDefault = !!meta.isDefault;
+    }
+    store.write('profiles', profiles);
+    lastFgExe = ''; // réévaluer la bascule avec les nouvelles règles
+    return profiles;
   });
   ipcMain.handle('profiles:remove', (e, name) => {
     const profiles = store.read('profiles', []).filter((p) => p.name !== name);
@@ -481,6 +578,18 @@ app.whenReady().then(() => {
   setupIpc();
   createWindow();
   createTray();
+
+  // Vérification discrète des mises à jour au démarrage
+  if (app.isPackaged && settings.autoCheckUpdates) {
+    setTimeout(async () => {
+      try {
+        const r = await autoUpdater.checkForUpdates();
+        if (r && r.updateInfo && autoUpdater.currentVersion.compare(r.updateInfo.version) < 0) {
+          send('update:available', { latest: r.updateInfo.version });
+        }
+      } catch { /* hors ligne ou GitHub injoignable : silencieux */ }
+    }, 15000);
+  }
 });
 
 app.on('before-quit', () => { quitting = true; });

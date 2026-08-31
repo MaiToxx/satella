@@ -318,6 +318,35 @@
             </div>
             <label class="switch"><input type="checkbox" id="set-macros"><span></span></label>
           </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Profils par application</div>
+              <div class="setting-desc">Bascule automatiquement le profil (éclairage + macros) selon
+                l'application au premier plan. Les applications se lient à un profil sur la page Profils.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-appprofiles"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Extinction automatique des LED</div>
+              <div class="setting-desc">Éteint le clavier et la souris après une période d'inactivité,
+                et les rallume à la première frappe ou au premier mouvement.</div>
+              <div class="btn-row" style="margin-top:10px">
+                <label class="muted" style="font-size:12.5px">Après</label>
+                <input type="range" id="set-idle-min" min="1" max="60" value="10">
+                <span class="muted" id="set-idle-val" style="font-family:var(--font-mono)">10 min</span>
+              </div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-idleoff"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Vérifier les mises à jour au démarrage</div>
+              <div class="setting-desc">Recherche discrète une nouvelle version au lancement et
+                propose le téléchargement si besoin.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-autoupdate"><span></span></label>
+          </div>
         </div>
         <h2>Empreinte mémoire de Satella</h2>
         <div class="panel">

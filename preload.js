@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('satella', {
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+  onUpdateAvailable: on('update:available'),
   onUpdateProgress: on('update:progress'),
   onUpdateReady: on('update:ready'),
   onUpdateError: on('update:error'),
@@ -72,5 +73,7 @@ contextBridge.exposeInMainWorld('satella', {
     save: (name) => ipcRenderer.invoke('profiles:save', name),
     load: (name) => ipcRenderer.invoke('profiles:load', name),
     remove: (name) => ipcRenderer.invoke('profiles:remove', name),
+    setMeta: (name, meta) => ipcRenderer.invoke('profiles:setMeta', name, meta),
+    onAutoApplied: on('profiles:autoApplied'),
   },
 });

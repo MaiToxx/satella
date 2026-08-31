@@ -141,6 +141,21 @@ $('#update-check').addEventListener('click', async () => {
     out.textContent = `Tu as la dernière version (${res.current}).`;
   }
 });
+window.satella.onUpdateAvailable(({ latest }) => {
+  toast(`Nouvelle version ${latest} disponible.`, 5000);
+  const out = $('#update-result');
+  out.innerHTML = '';
+  out.append(`Nouvelle version ${latest} disponible. `);
+  const b = document.createElement('button');
+  b.className = 'btn small primary';
+  b.textContent = 'Télécharger et installer';
+  b.addEventListener('click', async () => {
+    out.textContent = 'Téléchargement...';
+    const dl = await window.satella.downloadUpdate();
+    if (!dl.ok) out.textContent = 'Téléchargement impossible : ' + dl.error;
+  });
+  out.appendChild(b);
+});
 window.satella.onUpdateProgress(({ percent }) => {
   $('#update-result').textContent = `Téléchargement : ${percent}%`;
 });
@@ -1120,11 +1135,34 @@ async function renderProfiles() {
   const p = $('#profile-list');
   p.innerHTML = profiles.map((pr) => `
     <div class="profile-row" data-name="${pr.name.replace(/"/g, '&quot;')}">
-      <span class="p-name">${pr.name}</span>
-      <span class="p-date">${new Date(pr.savedAt).toLocaleString('fr-FR')}</span>
-      <button class="btn small p-load">Charger</button>
-      <button class="btn small danger p-del">Supprimer</button>
+      <div class="p-main">
+        <span class="p-name">${pr.name}
+          ${pr.isDefault ? '<span class="tag tag-kb">Par défaut</span>' : ''}</span>
+        <span class="p-date">${new Date(pr.savedAt).toLocaleString('fr-FR')}</span>
+        <button class="btn small p-load">Charger</button>
+        <button class="btn small p-default">${pr.isDefault ? 'Retirer le défaut' : 'Par défaut'}</button>
+        <button class="btn small danger p-del">Supprimer</button>
+      </div>
+      <div class="p-apps">
+        <input type="text" class="p-apps-input" placeholder="Applications liées : jeu.exe, autre.exe"
+          value="${(pr.apps || []).join(', ')}">
+        <button class="btn small p-apps-save">Lier</button>
+      </div>
     </div>`).join('') || '<p class="muted">Aucun profil sauvegardé.</p>';
+
+  $$('.p-default').forEach((b) => b.addEventListener('click', async (e) => {
+    const row = e.target.closest('.profile-row');
+    const pr = profiles.find((x) => x.name === row.dataset.name);
+    await window.satella.profiles.setMeta(row.dataset.name, { isDefault: !(pr && pr.isDefault) });
+    renderProfiles();
+  }));
+  $$('.p-apps-save').forEach((b) => b.addEventListener('click', async (e) => {
+    const row = e.target.closest('.profile-row');
+    const apps = row.querySelector('.p-apps-input').value.split(',');
+    await window.satella.profiles.setMeta(row.dataset.name, { apps });
+    renderProfiles();
+    toast('Applications liées au profil.');
+  }));
 
   $$('.p-load').forEach((b) => b.addEventListener('click', async (e) => {
     const name = e.target.closest('.profile-row').dataset.name;
@@ -1211,6 +1249,11 @@ function renderSettings(s) {
   $('#set-startmin').checked = s.startMinimized;
   $('#row-start-min').style.opacity = s.launchAtStartup ? '1' : '.45';
   $('#set-startmin').disabled = !s.launchAtStartup;
+  $('#set-appprofiles').checked = s.appProfiles;
+  $('#set-idleoff').checked = s.idleOff;
+  $('#set-idle-min').value = s.idleMinutes;
+  $('#set-idle-val').textContent = s.idleMinutes + ' min';
+  $('#set-autoupdate').checked = s.autoCheckUpdates;
   $('#mem-auto').checked = s.autoOptimize;
   $('#mem-threshold').value = s.autoOptimizeThreshold;
   $('#mem-threshold-val').textContent = s.autoOptimizeThreshold + '%';
@@ -1232,6 +1275,22 @@ $('#set-startup').addEventListener('change', async (e) => {
 });
 $('#set-startmin').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ startMinimized: e.target.checked }));
+});
+
+$('#set-appprofiles').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ appProfiles: e.target.checked }));
+});
+$('#set-idleoff').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ idleOff: e.target.checked }));
+});
+$('#set-idle-min').addEventListener('input', (e) => {
+  $('#set-idle-val').textContent = e.target.value + ' min';
+});
+$('#set-idle-min').addEventListener('change', (e) => {
+  window.satella.settings.set({ idleMinutes: +e.target.value });
+});
+$('#set-autoupdate').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ autoCheckUpdates: e.target.checked }));
 });
 
 $('#set-leds').addEventListener('change', async (e) => {
@@ -1303,6 +1362,17 @@ async function init() {
   });
   window.satella.macros.onPlayError(({ message }) => toast('Erreur macro : ' + message, 4000));
   window.satella.settings.onChanged(renderSettings);
+  window.satella.profiles.onAutoApplied(({ name, exe, ledState, macros: m }) => {
+    STATE = ledState;
+    MACROS = m;
+    currentMacroId = null;
+    syncToolbars();
+    renderMacroList();
+    renderMacroEditor();
+    toast(exe
+      ? `Profil « ${name} » appliqué pour ${exe}.`
+      : `Profil par défaut « ${name} » appliqué.`);
+  });
   window.satella.memory.onAuto((res) => {
     if (res && res.ok && res.freed > 0) {
       toast(`Nettoyage automatique : ${(res.freed / GO).toFixed(2)} Go libérés.`);
