@@ -521,9 +521,13 @@ class DirectBackend extends EventEmitter {
         this.kbQuery(KB_CMD_DYNAMIC, i, len, Array.from(data.slice(i, i + len)), true);
         wrote++;
       }
-      // Entretien du mode dynamique quand l'image ne change pas
-      if (!wrote && now - (this._lastFallbackWrite || 0) > 700) {
-        this.kbQuery(KB_CMD_DYNAMIC, 0, 54, Array.from(data.slice(0, 54)), true);
+      // Entretien du mode dynamique quand l'image ne change pas (au-delà
+      // de ~400 ms sans écriture, le clavier raffiche son effet enregistré)
+      if (!wrote && now - (this._lastFallbackWrite || 0) > 300) {
+        for (let i = 0; i < data.length; i += 54) {
+          const len = Math.min(54, data.length - i);
+          this.kbQuery(KB_CMD_DYNAMIC, i, len, Array.from(data.slice(i, i + len)), true);
+        }
         wrote = 1;
       }
       if (wrote) this._lastFallbackWrite = now;

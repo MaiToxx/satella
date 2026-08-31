@@ -60,7 +60,9 @@ function sameChunk(a, b, start, len) {
 
 function pump() {
   if (!running) return;
-  if (paused || (!latest && Date.now() - lastWriteAt < 700)) {
+  // Entretien toutes les 300 ms au plus : au-delà, le clavier quitte le
+  // mode dynamique et raffiche son effet enregistré (LED fantômes).
+  if (paused || (!latest && Date.now() - lastWriteAt < 300)) {
     setTimeout(pump, 15);
     return;
   }
@@ -78,9 +80,13 @@ function pump() {
       lastWritten = frame;
       if (wrote) lastWriteAt = Date.now();
     } else {
-      // Entretien : réécrit le premier bloc pour rester en mode dynamique
+      // Entretien : réécrit l'image complète pour rester en mode dynamique
+      // (et retomber sur un tampon cohérent si le clavier avait décroché)
       if (lastWritten) {
-        writeChunk(0, lastWritten.slice(0, 54));
+        for (let i = 0; i < lastWritten.length; i += 54) {
+          const len = Math.min(54, lastWritten.length - i);
+          writeChunk(i, lastWritten.slice(i, i + len));
+        }
         lastWriteAt = Date.now();
       }
     }
