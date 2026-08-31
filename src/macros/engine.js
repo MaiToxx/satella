@@ -144,23 +144,33 @@ class MacroEngine extends EventEmitter {
   // ---- Enregistreur -------------------------------------------------------
   ensureHook() {
     if (!uiohook) throw new Error("Module d'écoute globale indisponible : " + (uiohookError && uiohookError.message));
-    if (this.hookStarted) return;
-
-    uiohook.on('keydown', (e) => this.onRecordKey(e, false));
-    uiohook.on('keyup', (e) => this.onRecordKey(e, true));
-    uiohook.on('mousedown', (e) => this.onRecordMouse(e, 'down'));
-    uiohook.on('mouseup', (e) => this.onRecordMouse(e, 'up'));
-    uiohook.on('wheel', (e) => this.onRecordWheel(e));
-    uiohook.on('mousemove', (e) => this.onRecordMove(e));
-    uiohook.on('keydown', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: true }));
-    uiohook.on('keyup', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: false }));
-    uiohook.start();
-    this.hookStarted = true;
+    if (!this._listenersAttached) {
+      uiohook.on('keydown', (e) => this.onRecordKey(e, false));
+      uiohook.on('keyup', (e) => this.onRecordKey(e, true));
+      uiohook.on('mousedown', (e) => this.onRecordMouse(e, 'down'));
+      uiohook.on('mouseup', (e) => this.onRecordMouse(e, 'up'));
+      uiohook.on('wheel', (e) => this.onRecordWheel(e));
+      uiohook.on('mousemove', (e) => this.onRecordMove(e));
+      uiohook.on('keydown', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: true }));
+      uiohook.on('keyup', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: false }));
+      this._listenersAttached = true;
+    }
+    if (!this.hookStarted) {
+      uiohook.start();
+      this.hookStarted = true;
+    }
   }
 
-  // Démarre l'écoute globale même sans enregistrement (pour l'effet réactif)
+  // Démarre l'écoute globale (effet réactif, onde de choc, calibration)
   startActivityFeed() {
     try { this.ensureHook(); return true; } catch { return false; }
+  }
+
+  // Coupe l'écoute globale quand plus rien n'en a besoin (économie de ressources)
+  stopActivityFeed() {
+    if (this.recording || !this.hookStarted || !uiohook) return;
+    try { uiohook.stop(); } catch { /* déjà arrêté */ }
+    this.hookStarted = false;
   }
 
   pushRecordStep(step) {

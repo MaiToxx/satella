@@ -3,15 +3,16 @@
 Application de bureau pour gérer l'éclairage du clavier **SURMEN GS98** et de la
 souris **Risophy PC365A**, avec un éditeur de macros avancé.
 
-## Lancer l'application
+## Installer et lancer
 
-Double-clique sur **`Lancer Satella.cmd`**, ou en ligne de commande :
+Version distribuée : installe `Satella-Setup-X.Y.Z.exe` (releases GitHub du
+dépôt MaiToxx/satella). Les **mises à jour sont automatiques** : le bouton
+« Vérifier les mises à jour » (page Accueil) télécharge la nouvelle version
+et l'installe au redémarrage de l'app.
 
-```
-npm start
-```
-
-(Première installation : `npm install` dans ce dossier — nécessite Node.js.)
+Développement : `npm install` puis `npm start` dans ce dossier (Node.js requis).
+Publier une version : bump de `version` dans package.json, puis
+`npx electron-builder --win --publish always` (variable GH_TOKEN requise).
 
 ## Fonctionnalités
 
@@ -66,8 +67,7 @@ La détection est automatique, y compris au branchement à chaud (scan toutes le
 
 > Les protocoles de ces puces OEM ont été documentés par la communauté
 > open source (projet OpenRGB, GPL) ; Satella en est une implémentation
-> indépendante. Un moteur OpenRGB reste disponible en option de secours
-> (page Périphériques) pour d'autres périphériques.
+> indépendante et autonome, sans aucun logiciel tiers.
 
 **Pourquoi pas d'animation fluide envoyée en continu ?** Le clavier sauvegarde
 chaque écriture en mémoire flash : un flux à 30 img/s l'userait prématurément.
@@ -88,7 +88,6 @@ main.js                  Processus principal Electron (assemblage + IPC)
 preload.js               Pont sécurisé UI <-> principal
 src/shared/layout.js     Disposition GS98 + zones PC365A
 src/led/engine.js        Moteur d'effets (30 img/s)
-src/led/openrgb.js       Backend matériel OpenRGB (SDK TCP)
 src/led/hid.js           Détection USB/HID (diagnostic)
 src/macros/engine.js     Déclencheurs, lecture, enregistreur
 src/macros/input.js      Injection SendInput (koffi/user32)

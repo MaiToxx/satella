@@ -13,7 +13,11 @@ contextBridge.exposeInMainWorld('satella', {
   init: () => ipcRenderer.invoke('app:init'),
   ready: () => ipcRenderer.invoke('app:ready'),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
-  openUpdatePage: (url) => ipcRenderer.invoke('app:openUpdatePage', url),
+  downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+  onUpdateProgress: on('update:progress'),
+  onUpdateReady: on('update:ready'),
+  onUpdateError: on('update:error'),
 
   led: {
     set: (device, patch) => ipcRenderer.invoke('led:set', device, patch),
@@ -27,8 +31,6 @@ contextBridge.exposeInMainWorld('satella', {
     directStatus: () => ipcRenderer.invoke('devices:directStatus'),
     testKeyboard: (r, g, b) => ipcRenderer.invoke('devices:testKeyboard', r, g, b),
     testMouse: (mode) => ipcRenderer.invoke('devices:testMouse', mode),
-    reconnectOpenrgb: (host, port) => ipcRenderer.invoke('devices:reconnectOpenrgb', host, port),
-    onOpenrgbStatus: on('devices:openrgb'),
     onDirectStatus: on('devices:direct'),
   },
 

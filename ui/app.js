@@ -113,7 +113,7 @@ $$('.nav-btn').forEach((b) => b.addEventListener('click', () => showPage(b.datas
 $('#card-keyboard').addEventListener('click', () => showPage('keyboard'));
 $('#card-mouse').addEventListener('click', () => showPage('mouse'));
 
-/* ================= Mises à jour ================= */
+/* ================= Mises à jour automatiques ================= */
 $('#update-check').addEventListener('click', async () => {
   const out = $('#update-result');
   out.textContent = 'Vérification en cours...';
@@ -123,16 +123,28 @@ $('#update-check').addEventListener('click', async () => {
     return;
   }
   if (res.newer) {
-    out.innerHTML = '';
-    out.append(`Nouvelle version ${res.latest} disponible. `);
-    const b = document.createElement('button');
-    b.className = 'btn small primary';
-    b.textContent = 'Télécharger';
-    b.addEventListener('click', () => window.satella.openUpdatePage(res.url));
-    out.appendChild(b);
+    out.textContent = `Nouvelle version ${res.latest} : téléchargement...`;
+    const dl = await window.satella.downloadUpdate();
+    if (!dl.ok) out.textContent = 'Téléchargement impossible : ' + dl.error;
   } else {
     out.textContent = `Tu as la dernière version (${res.current}).`;
   }
+});
+window.satella.onUpdateProgress(({ percent }) => {
+  $('#update-result').textContent = `Téléchargement : ${percent}%`;
+});
+window.satella.onUpdateReady(({ version }) => {
+  const out = $('#update-result');
+  out.innerHTML = '';
+  out.append(`Version ${version} prête. `);
+  const b = document.createElement('button');
+  b.className = 'btn small primary';
+  b.textContent = 'Redémarrer et installer';
+  b.addEventListener('click', () => window.satella.installUpdate());
+  out.appendChild(b);
+});
+window.satella.onUpdateError(({ message }) => {
+  $('#update-result').textContent = 'Erreur de mise à jour : ' + message;
 });
 
 /* ================= Clavier ================= */
@@ -932,16 +944,14 @@ $('#macro-new').addEventListener('click', newMacro);
 
 /* ================= Périphériques ================= */
 let DIRECT = { keyboard: null, mouse: null };
-let ORGB = { connected: false };
 
 function updateBadge() {
   const badge = $('#backend-badge');
-  const via = (direct) => direct ? 'DIRECT' : (ORGB.connected ? 'OPENRGB' : 'ABSENT');
   const row = (label, direct) => `
-    <div class="dev-status ${direct || ORGB.connected ? 'on' : ''}">
+    <div class="dev-status ${direct ? 'on' : ''}">
       <span class="dot"></span>
       <span class="dv-name">${label}</span>
-      <span class="dv-via">${via(direct)}</span>
+      <span class="dv-via">${direct ? 'DIRECT' : 'ABSENT'}</span>
     </div>`;
   badge.innerHTML = row('GS98', DIRECT.keyboard) + row('PC365A', DIRECT.mouse);
 }
@@ -969,45 +979,6 @@ function renderDirectPanel(status) {
     ${row(status.mouse, 'Souris Risophy PC365A, puce Areson', '25A7:FA7B')}
     ${status.error ? `<p class="muted">Attention : ${status.error}</p>` : ''}
   `;
-}
-
-function renderOpenrgbPanel(status) {
-  ORGB = status;
-  updateBadge();
-  const p = $('#openrgb-panel');
-  p.innerHTML = `
-    <h2 style="margin-top:0">Moteur OpenRGB</h2>
-    <p class="muted" style="margin-bottom:10px">
-      Satella pilote le matériel via le serveur SDK d'OpenRGB (logiciel gratuit et open source).
-      Lance OpenRGB, active « SDK Server » (onglet Paramètres), puis reconnecte.
-    </p>
-    <div class="btn-row" style="margin-bottom:10px">
-      <span class="tag ${status.connected ? 'tag-target' : 'tag-vendor'}">
-        ${status.connected ? 'CONNECTÉ' : 'NON CONNECTÉ'}</span>
-      ${status.error ? `<span class="muted">${status.error}</span>` : ''}
-    </div>
-    <div class="btn-row">
-      <input type="text" id="orgb-host" value="127.0.0.1" style="width:130px">
-      <input type="number" id="orgb-port" value="6742" style="width:90px">
-      <button class="btn primary" id="orgb-connect">Reconnecter</button>
-    </div>
-    ${status.connected ? `
-      <h2>Périphériques OpenRGB</h2>
-      ${(status.devices || []).map((d) => `
-        <div class="hid-row">
-          <span>${d.name}</span>
-          <span class="h-ids">${d.ledCount} LED(s)</span>
-          ${d.name === status.keyboard ? '<span class="tag tag-kb">Clavier retenu</span>' : ''}
-          ${d.name === status.mouse ? '<span class="tag tag-mouse">Souris retenue</span>' : ''}
-        </div>`).join('') || '<p class="muted">Aucun périphérique exposé par OpenRGB.</p>'}
-    ` : ''}
-    ${!CAPS.input ? `<p class="muted" style="margin-top:10px">Attention : injection d'entrées indisponible : ${CAPS.inputError || ''}</p>` : ''}
-  `;
-  $('#orgb-connect').addEventListener('click', async () => {
-    const s = await window.satella.devices.reconnectOpenrgb($('#orgb-host').value, +$('#orgb-port').value);
-    renderOpenrgbPanel(s);
-    toast(s.connected ? 'OpenRGB connecté.' : "Impossible de se connecter à OpenRGB.");
-  });
 }
 
 function renderHidList(hid) {
@@ -1124,13 +1095,11 @@ async function init() {
   renderMacroList();
   renderMacroEditor();
   renderDirectPanel(data.direct);
-  renderOpenrgbPanel(data.openrgb);
   renderHidList(data.hid);
   renderProfiles();
 
   window.satella.led.onFrame(applyFrame);
   window.satella.devices.onDirectStatus(renderDirectPanel);
-  window.satella.devices.onOpenrgbStatus(renderOpenrgbPanel);
   window.satella.macros.onRecordEvent((step) => {
     if (!recording) return;
     recordedSteps.push(step);
