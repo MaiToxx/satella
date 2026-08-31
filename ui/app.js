@@ -521,9 +521,9 @@ function renderMacroEditor() {
           value="${(m.trigger && m.trigger.accelerator) || ''}" placeholder="Clique puis presse un raccourci…">
         <button class="btn small" id="me-trigger-clear">Effacer</button>
         <span class="muted" style="font-size:11.5px;flex-basis:100%">
-          Touche seule acceptée (pavé numérique, flèches, F1 à F12, ponctuation…) :
-          elle est alors réservée aux macros tant que Satella tourne.
-          Lettres et chiffres : avec Ctrl, Alt ou Shift.</span>
+          Toute touche est acceptée, seule ou combinée. Attention : une touche
+          seule est réservée aux macros dans tout Windows tant que Satella
+          tourne (un déclencheur « A » seul rend la lettre A intapable).</span>
       </div>
       <label>Répétitions</label>
       <div class="btn-row">
@@ -927,19 +927,12 @@ function setupTriggerCapture(inputEl, macro) {
         NumpadSubtract: 'numsub', NumpadDecimal: 'numdec',
       };
       let key = null;
-      let needsModifier = false;
-      if (/^Key([A-Z])$/.test(e.code)) { key = e.code.slice(3); needsModifier = true; }
-      else if (/^Digit(\d)$/.test(e.code)) { key = e.code.slice(5); needsModifier = true; }
+      if (/^Key([A-Z])$/.test(e.code)) key = e.code.slice(3);
+      else if (/^Digit(\d)$/.test(e.code)) key = e.code.slice(5);
       else if (/^F\d{1,2}$/.test(e.code)) key = e.code;
       else if (/^Numpad(\d)$/.test(e.code)) key = 'num' + e.code.slice(6);
       else if (codeMap[e.code]) key = codeMap[e.code];
       if (!key) return;
-      // Lettres et chiffres seuls : refusés (un raccourci global confisquerait
-      // la touche dans tout le système). Les autres touches passent seules.
-      if (!parts.length && needsModifier) {
-        inputEl.value = 'Ajoute Ctrl/Alt/Shift à une lettre ou un chiffre';
-        return;
-      }
       parts.push(key);
       const accel = parts.join('+');
       macro.trigger = { type: 'hotkey', accelerator: accel };

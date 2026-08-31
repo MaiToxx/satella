@@ -2,7 +2,7 @@
 // Assemble : moteur d'effets LED, pilote USB direct, moteur de macros,
 // persistance et IPC vers l'interface.
 
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
 // Mise à jour automatique via les releases GitHub du dépôt MaiToxx/satella
@@ -21,6 +21,8 @@ const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
 
 let win = null;
+let tray = null;
+let quitting = false;
 let store, ledEngine, direct, macroEngine;
 let macros = [];
 let calibrating = false;
@@ -41,6 +43,16 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
+
+  // Fermer la fenêtre = minimiser en zone de notification : Satella
+  // continue de tourner (macros, effets). Quitter via l'icône de la zone
+  // de notification, ou lors d'une mise à jour.
+  win.on('close', (e) => {
+    if (!quitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
 
   win.webContents.on('did-finish-load', () => {
     if (ledEngine) ledEngine.renderOnce();
@@ -328,12 +340,28 @@ function setupIpc() {
   });
 }
 
+function createTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png'))
+    .resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip('Satella');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Ouvrir Satella', click: () => { win.show(); win.focus(); } },
+    { type: 'separator' },
+    { label: 'Quitter', click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on('double-click', () => { win.show(); win.focus(); });
+}
+
 app.whenReady().then(() => {
   setupEngines();
   setupUpdater();
   setupIpc();
   createWindow();
+  createTray();
 });
+
+app.on('before-quit', () => { quitting = true; });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
@@ -342,5 +370,6 @@ app.on('will-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  app.quit();
+  // La fenêtre se cache au lieu de se fermer : ne quitter que si demandé
+  if (quitting) app.quit();
 });
