@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('satella', {
     refreshHid: () => ipcRenderer.invoke('devices:refreshHid'),
     directStatus: () => ipcRenderer.invoke('devices:directStatus'),
     testKeyboard: (r, g, b) => ipcRenderer.invoke('devices:testKeyboard', r, g, b),
+    hookDebug: (on) => ipcRenderer.invoke('devices:hookDebug', on),
     testMouse: (mode) => ipcRenderer.invoke('devices:testMouse', mode),
     onDirectStatus: on('devices:direct'),
   },

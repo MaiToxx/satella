@@ -26,6 +26,7 @@ let quitting = false;
 let store, ledEngine, direct, macroEngine;
 let macros = [];
 let calibrating = false;
+let hookDebug = false;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -188,7 +189,7 @@ function setupEngines() {
 // effet réactif ou onde de choc, enregistrement de macro, calibration.
 function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
-  const needed = macroEngine.recording || calibrating
+  const needed = macroEngine.recording || calibrating || hookDebug
     || eff === 'reactive' || eff === 'ripple';
   if (needed) macroEngine.startActivityFeed();
   else macroEngine.stopActivityFeed();
@@ -266,6 +267,11 @@ function setupIpc() {
     return hid.listDevices();
   });
   ipcMain.handle('devices:directStatus', () => direct.status());
+  ipcMain.handle('devices:hookDebug', (e, on) => {
+    hookDebug = !!on;
+    updateHookNeed();
+    return hookDebug;
+  });
   // (moteur OpenRGB supprimé en 1.1.0 : le pilote direct suffit)
   ipcMain.handle('devices:testKeyboard', (e, r, g, b) => {
     try { direct.testKeyboard(r, g, b); return { ok: true }; }

@@ -1078,6 +1078,22 @@ const DIAG_MOUSE_MODES = [
     });
     cont.appendChild(b);
   }
+  // Visualiseur de frappes : montre exactement ce que Satella reçoit
+  let keysDebug = false;
+  const keysSeen = [];
+  $('#diag-keys-toggle').addEventListener('click', async () => {
+    keysDebug = !keysDebug;
+    await window.satella.devices.hookDebug(keysDebug);
+    $('#diag-keys-toggle').textContent = keysDebug ? "Arrêter l'écoute" : "Activer l'écoute";
+    if (keysDebug) { keysSeen.length = 0; $('#diag-keys').textContent = 'Presse des touches...'; }
+  });
+  window.satella.macros.onKeyActivity(({ key }) => {
+    if (!keysDebug || !key) return;
+    keysSeen.push(keyLabel(key));
+    if (keysSeen.length > 10) keysSeen.shift();
+    $('#diag-keys').textContent = keysSeen.join('  >  ');
+  });
+
   $$('.diag-kb').forEach((b) => b.addEventListener('click', async () => {
     const [r, g, v] = b.dataset.rgb.split(',').map(Number);
     const res = await window.satella.devices.testKeyboard(r, g, v);
