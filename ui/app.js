@@ -812,6 +812,10 @@ function renderCalibModal() {
   if (!calib) return;
   const last = calib.lastLabel
     ? `<p class="muted" style="margin-top:8px">Dernière touche associée : ${calib.lastLabel}</p>` : '';
+  const dup = calib.dupWarn
+    ? `<p style="margin-top:8px;color:var(--warn)">Appui reconnu comme « ${calib.dupWarn} », déjà associée.
+       Si la touche allumée est sa jumelle (Alt droit, Ctrl droit...), le clavier envoie le même code :
+       associe-la manuellement ci-dessous.</p>` : '';
   const options = LAYOUT.keyboard.map((k) => {
     const label = keyLabel(k.id) + (calib.map[k.id] !== undefined ? ' (déjà associée)' : '');
     return `<option value="${k.id}">${label}</option>`;
@@ -822,6 +826,7 @@ function renderCalibModal() {
        Presse cette touche. S'il n'y a aucune touche allumée, clique sur Passer.</p>
     <p class="muted" style="margin-top:8px">${calib.mapped} touche(s) associée(s) pour l'instant.</p>
     ${last}
+    ${dup}
     <div class="btn-row" style="margin-top:14px">
       <select id="calib-manual-key">${options}</select>
       <button class="btn small" id="calib-manual">Associer manuellement</button>
@@ -847,6 +852,7 @@ function renderCalibModal() {
 
 async function calibAdvance() {
   calib.slot++;
+  calib.dupWarn = '';
   calib.lastAdvance = Date.now();
   if (calib.slot >= CALIB_TOTAL) return calibStop(true);
   renderCalibModal();
@@ -879,6 +885,14 @@ $('#kb-calibrate').addEventListener('click', async () => {
 window.satella.macros.onKeyActivity(({ key }) => {
   if (!calib || !key) return;
   if (Date.now() - calib.lastAdvance < 300) return; // anti-rebond
+  if (calib.map[key] !== undefined && calib.map[key] !== calib.slot) {
+    // Touche jumelle probable (Alt droit, Ctrl droit... certains claviers
+    // envoient le même code que la variante gauche) : ne rien écraser,
+    // demander une association manuelle.
+    calib.dupWarn = keyLabel(key);
+    renderCalibModal();
+    return;
+  }
   calib.map[key] = calib.slot;
   calib.mapped = Object.keys(calib.map).length;
   calib.lastLabel = `${keyLabel(key)} (emplacement ${calib.slot})`;
