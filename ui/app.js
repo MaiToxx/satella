@@ -505,6 +505,10 @@ function renderMacroEditor() {
         <input type="text" readonly class="trigger-input" id="me-trigger"
           value="${(m.trigger && m.trigger.accelerator) || ''}" placeholder="Clique puis presse un raccourci…">
         <button class="btn small" id="me-trigger-clear">Effacer</button>
+        <span class="muted" style="font-size:11.5px;flex-basis:100%">
+          Touche seule acceptée (pavé numérique, flèches, F1 à F12, ponctuation…) :
+          elle est alors réservée aux macros tant que Satella tourne.
+          Lettres et chiffres : avec Ctrl, Alt ou Shift.</span>
       </div>
       <label>Répétitions</label>
       <div class="btn-row">
@@ -864,20 +868,30 @@ function setupTriggerCapture(inputEl, macro) {
       if (e.shiftKey) parts.push('Shift');
       if (e.metaKey) parts.push('Super');
       const codeMap = {
-        Space: 'Space', Enter: 'Return', Escape: 'Esc', Backspace: 'Backspace', Tab: 'Tab',
+        Space: 'Space', Enter: 'Return', NumpadEnter: 'Return', Escape: 'Esc',
+        Backspace: 'Backspace', Tab: 'Tab', CapsLock: 'Capslock',
         ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
         Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End',
-        PageUp: 'PageUp', PageDown: 'PageDown',
+        PageUp: 'PageUp', PageDown: 'PageDown', PrintScreen: 'PrintScreen',
+        NumLock: 'Numlock', ScrollLock: 'Scrolllock',
+        Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'",
+        BracketLeft: '[', BracketRight: ']', Backslash: '\\', Backquote: '`',
+        Minus: '-', Equal: '=', IntlBackslash: '\\',
+        NumpadMultiply: 'nummult', NumpadDivide: 'numdiv', NumpadAdd: 'numadd',
+        NumpadSubtract: 'numsub', NumpadDecimal: 'numdec',
       };
       let key = null;
-      if (/^Key([A-Z])$/.test(e.code)) key = e.code.slice(3);
-      else if (/^Digit(\d)$/.test(e.code)) key = e.code.slice(5);
+      let needsModifier = false;
+      if (/^Key([A-Z])$/.test(e.code)) { key = e.code.slice(3); needsModifier = true; }
+      else if (/^Digit(\d)$/.test(e.code)) { key = e.code.slice(5); needsModifier = true; }
       else if (/^F\d{1,2}$/.test(e.code)) key = e.code;
       else if (/^Numpad(\d)$/.test(e.code)) key = 'num' + e.code.slice(6);
       else if (codeMap[e.code]) key = codeMap[e.code];
       if (!key) return;
-      if (!parts.length && !/^F\d{1,2}$/.test(key)) {
-        inputEl.value = 'Ajoute Ctrl/Alt/Shift…';
+      // Lettres et chiffres seuls : refusés (un raccourci global confisquerait
+      // la touche dans tout le système). Les autres touches passent seules.
+      if (!parts.length && needsModifier) {
+        inputEl.value = 'Ajoute Ctrl/Alt/Shift à une lettre ou un chiffre';
         return;
       }
       parts.push(key);
