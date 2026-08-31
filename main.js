@@ -38,7 +38,12 @@ const DEFAULT_SETTINGS = {
   macrosEnabled: true,
   autoOptimize: false,
   autoOptimizeThreshold: 80,
+  launchAtStartup: false,
+  startMinimized: true,
 };
+
+// Démarrage silencieux : Windows relance Satella avec ce drapeau
+const startedHidden = process.argv.includes('--hidden');
 let settings = { ...DEFAULT_SETTINGS };
 
 function createWindow() {
@@ -50,6 +55,7 @@ function createWindow() {
     backgroundColor: '#0b0e14',
     autoHideMenuBar: true,
     title: 'Satella',
+    show: !startedHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -220,6 +226,17 @@ function applySettings() {
     globalShortcut.unregisterAll();
   }
 
+  // --- Lancement avec Windows ---
+  // En développement, l'entrée pointerait vers electron.exe : on ne touche
+  // au registre que pour l'application installée.
+  if (app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: !!settings.launchAtStartup,
+      path: process.execPath,
+      args: settings.startMinimized ? ['--hidden'] : [],
+    });
+  }
+
   // --- Optimiseur automatique ---
   clearInterval(autoOptTimer);
   autoOptTimer = null;
@@ -296,6 +313,7 @@ function setupIpc() {
   ipcMain.handle('app:init', () => ({
     version: app.getVersion(),
     settings,
+    packaged: app.isPackaged,
     memoryAvailable: memory.available(),
     layout,
     ledState: ledEngine.state,
@@ -399,6 +417,11 @@ function setupIpc() {
 
   // ---- Paramètres ----
   ipcMain.handle('settings:get', () => settings);
+  // État réel côté Windows : l'utilisateur peut avoir désactivé l'entrée
+  // depuis le gestionnaire des tâches.
+  ipcMain.handle('settings:startupState', () => (
+    app.isPackaged ? app.getLoginItemSettings().openAtLogin : false
+  ));
   ipcMain.handle('settings:set', (e, patch) => {
     settings = { ...settings, ...patch };
     store.write('settings', settings);
@@ -439,12 +462,17 @@ function createTray() {
     .resize({ width: 16, height: 16 });
   tray = new Tray(icon);
   tray.setToolTip('Satella');
+  const reveal = () => {
+    win.show();
+    win.focus();
+    if (ledEngine) ledEngine.renderOnce(); // l'aperçu était en veille
+  };
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Ouvrir Satella', click: () => { win.show(); win.focus(); } },
+    { label: 'Ouvrir Satella', click: reveal },
     { type: 'separator' },
     { label: 'Quitter', click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.on('double-click', () => { win.show(); win.focus(); });
+  tray.on('double-click', reveal);
 }
 
 app.whenReady().then(() => {

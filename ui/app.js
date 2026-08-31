@@ -117,6 +117,7 @@ function showPage(name) {
     memTimer = setInterval(refreshMemory, 2000);
   } else if (name === 'settings') {
     refreshFootprint();
+    syncStartupState();
   }
 }
 $$('.nav-btn').forEach((b) => b.addEventListener('click', () => showPage(b.dataset.page)));
@@ -1206,6 +1207,10 @@ function renderSettings(s) {
   SETTINGS = s;
   $('#set-leds').checked = s.ledsEnabled;
   $('#set-macros').checked = s.macrosEnabled;
+  $('#set-startup').checked = s.launchAtStartup;
+  $('#set-startmin').checked = s.startMinimized;
+  $('#row-start-min').style.opacity = s.launchAtStartup ? '1' : '.45';
+  $('#set-startmin').disabled = !s.launchAtStartup;
   $('#mem-auto').checked = s.autoOptimize;
   $('#mem-threshold').value = s.autoOptimizeThreshold;
   $('#mem-threshold-val').textContent = s.autoOptimizeThreshold + '%';
@@ -1219,6 +1224,16 @@ function renderSettings(s) {
   if (active && active.style.display === 'none') showPage('home');
 }
 
+$('#set-startup').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ launchAtStartup: e.target.checked }));
+  toast(e.target.checked
+    ? 'Satella se lancera au démarrage de Windows.'
+    : 'Lancement au démarrage désactivé.');
+});
+$('#set-startmin').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ startMinimized: e.target.checked }));
+});
+
 $('#set-leds').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ ledsEnabled: e.target.checked }));
   toast(e.target.checked ? 'Gestion des LED activée.' : 'Gestion des LED désactivée.');
@@ -1227,6 +1242,15 @@ $('#set-macros').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ macrosEnabled: e.target.checked }));
   toast(e.target.checked ? 'Macros activées.' : 'Macros désactivées.');
 });
+
+// L'entrée de démarrage peut être retirée depuis le gestionnaire des tâches
+// de Windows : on reflète l'état réel plutôt que le réglage enregistré.
+async function syncStartupState() {
+  const real = await window.satella.settings.startupState();
+  if (real !== SETTINGS.launchAtStartup) {
+    renderSettings(await window.satella.settings.set({ launchAtStartup: real }));
+  }
+}
 
 async function refreshFootprint() {
   const st = await window.satella.memory.status();

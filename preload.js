@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('satella', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
+    startupState: () => ipcRenderer.invoke('settings:startupState'),
     onChanged: on('settings:changed'),
   },
 
