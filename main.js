@@ -15,6 +15,7 @@ const { Store } = require('./src/store');
 const { LedEngine } = require('./src/led/engine');
 const { DirectBackend, SOFT_EFFECTS } = require('./src/led/direct');
 const hid = require('./src/led/hid');
+const memory = require('./src/system/memory');
 const { MacroEngine, uiohookAvailable } = require('./src/macros/engine');
 const input = require('./src/macros/input');
 const keys = require('./src/macros/keys');
@@ -27,6 +28,18 @@ let store, ledEngine, direct, macroEngine;
 let macros = [];
 let calibrating = false;
 let hookDebug = false;
+let detectTimer = null;
+let autoOptTimer = null;
+
+// Modules activables (page Paramètres) : couper un module libère ses
+// ressources (timers, écoute clavier, poignées USB).
+const DEFAULT_SETTINGS = {
+  ledsEnabled: true,
+  macrosEnabled: true,
+  autoOptimize: false,
+  autoOptimizeThreshold: 80,
+};
+let settings = { ...DEFAULT_SETTINGS };
 
 function createWindow() {
   win = new BrowserWindow({
@@ -124,14 +137,16 @@ function setupEngines() {
     if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
       win.webContents.send('led:frame', frame);
     }
-    if (direct.kb && SOFT_EFFECTS.has(ledEngine.state.keyboard.effect)) {
+    if (settings.ledsEnabled && direct.kb && SOFT_EFFECTS.has(ledEngine.state.keyboard.effect)) {
       direct.streamKeyboard(frame.keyboard);
     }
   });
   ledEngine.on('state', (state) => {
     store.write('led-state', state);
-    direct.applyKeyboard(state.keyboard);
-    direct.applyMouse(state.mouse);
+    if (settings.ledsEnabled) {
+      direct.applyKeyboard(state.keyboard);
+      direct.applyMouse(state.mouse);
+    }
     updateHookNeed();
   });
 
@@ -142,15 +157,7 @@ function setupEngines() {
   const savedKeyMap = store.read('keymap', null);
   if (savedKeyMap) direct.setKeyMap(savedKeyMap);
 
-  // Détection du matériel en pilotage direct + application de l'état sauvegardé
-  direct.detect();
-  direct.applyKeyboard(ledEngine.state.keyboard);
-  direct.applyMouse(ledEngine.state.mouse);
-
-  // Re-détection périodique si un périphérique manque (branchement à chaud)
-  setInterval(() => {
-    if (!direct.kb || !direct.mouse) direct.detect();
-  }, 5000);
+  settings = { ...DEFAULT_SETTINGS, ...store.read('settings', {}) };
 
   // Effet réactif : frappe réelle -> touche allumée.
   // Cas AltGr : Windows synthétise un appui Ctrl gauche juste avant Alt
@@ -182,15 +189,61 @@ function setupEngines() {
   macroEngine.on('play-state', (s) => send('macro:play-state', s));
   macroEngine.on('play-error', (e) => send('macro:play-error', e));
 
+  applySettings();
+}
+
+// Active ou coupe les modules selon les paramètres, à chaud.
+function applySettings() {
+  // --- Éclairage ---
+  if (settings.ledsEnabled) {
+    ledEngine.start();
+    direct.detect();
+    direct.applyKeyboard(ledEngine.state.keyboard);
+    direct.applyMouse(ledEngine.state.mouse);
+    if (!detectTimer) {
+      detectTimer = setInterval(() => {
+        if (!direct.kb || !direct.mouse) direct.detect();
+      }, 5000);
+    }
+  } else {
+    ledEngine.stop();
+    clearInterval(detectTimer);
+    detectTimer = null;
+    direct.dispose();
+  }
+
+  // --- Macros ---
+  if (settings.macrosEnabled) {
+    macroEngine.setMacros(macros);
+  } else {
+    macroEngine.stop();
+    globalShortcut.unregisterAll();
+  }
+
+  // --- Optimiseur automatique ---
+  clearInterval(autoOptTimer);
+  autoOptTimer = null;
+  if (settings.autoOptimize && memory.available()) {
+    autoOptTimer = setInterval(() => {
+      const st = memory.readStatus();
+      if (st && st.load >= settings.autoOptimizeThreshold) {
+        const res = memory.optimize();
+        send('memory:auto', res);
+      }
+    }, 60000);
+  }
+
   updateHookNeed();
+  send('settings:changed', settings);
 }
 
 // L'écoute clavier globale (uiohook) ne tourne que lorsqu'elle sert :
 // effet réactif ou onde de choc, enregistrement de macro, calibration.
 function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
-  const needed = macroEngine.recording || calibrating || hookDebug
-    || eff === 'reactive' || eff === 'ripple';
+  const forLeds = settings.ledsEnabled && (eff === 'reactive' || eff === 'ripple');
+  const forMacros = settings.macrosEnabled && macroEngine.recording;
+  const needed = forLeds || forMacros || calibrating || hookDebug;
   if (needed) macroEngine.startActivityFeed();
   else macroEngine.stopActivityFeed();
 }
@@ -242,6 +295,8 @@ function setupIpc() {
 
   ipcMain.handle('app:init', () => ({
     version: app.getVersion(),
+    settings,
+    memoryAvailable: memory.available(),
     layout,
     ledState: ledEngine.state,
     macros,
@@ -316,13 +371,13 @@ function setupIpc() {
     if (idx >= 0) macros[idx] = macro;
     else macros.push(macro);
     store.write('macros', macros);
-    macroEngine.setMacros(macros);
+    if (settings.macrosEnabled) macroEngine.setMacros(macros);
     return macros;
   });
   ipcMain.handle('macros:remove', (e, id) => {
     macros = macros.filter((m) => m.id !== id);
     store.write('macros', macros);
-    macroEngine.setMacros(macros);
+    if (settings.macrosEnabled) macroEngine.setMacros(macros);
     return macros;
   });
   ipcMain.handle('macros:play', (e, id) => macroEngine.play(id));
@@ -336,6 +391,19 @@ function setupIpc() {
     const steps = macroEngine.stopRecording();
     updateHookNeed();
     return steps;
+  });
+
+  // ---- Optimiseur mémoire ----
+  ipcMain.handle('memory:status', () => memory.readStatus());
+  ipcMain.handle('memory:optimize', () => memory.optimize());
+
+  // ---- Paramètres ----
+  ipcMain.handle('settings:get', () => settings);
+  ipcMain.handle('settings:set', (e, patch) => {
+    settings = { ...settings, ...patch };
+    store.write('settings', settings);
+    applySettings();
+    return settings;
   });
 
   // ---- Profils (instantanés complets : LEDs + macros) ----

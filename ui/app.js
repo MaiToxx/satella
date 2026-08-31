@@ -7,6 +7,7 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 const U = 46; // taille d'une touche 1u en pixels
 
 let LAYOUT = null;
+let SETTINGS = { ledsEnabled: true, macrosEnabled: true, autoOptimize: false, autoOptimizeThreshold: 80 };
 let STATE = null;       // état LED { keyboard, mouse }
 let MACROS = [];
 let KEY_NAMES = [];
@@ -108,6 +109,15 @@ function showPage(name) {
   $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + name));
   accentDevice = name === 'mouse' ? 'mouse' : 'keyboard';
   setAccent();
+  // La mémoire n'est interrogée que sur les pages qui l'affichent
+  clearInterval(memTimer);
+  memTimer = null;
+  if (name === 'optimizer') {
+    refreshMemory();
+    memTimer = setInterval(refreshMemory, 2000);
+  } else if (name === 'settings') {
+    refreshFootprint();
+  }
 }
 $$('.nav-btn').forEach((b) => b.addEventListener('click', () => showPage(b.dataset.page)));
 $('#card-keyboard').addEventListener('click', () => showPage('keyboard'));
@@ -1145,6 +1155,89 @@ $('#profile-save').addEventListener('click', async () => {
   toast(`Profil « ${name} » sauvegardé.`);
 });
 
+/* ================= Optimiseur mémoire ================= */
+const GO = 1073741824;
+let memTimer = null;
+
+function renderMemory(st) {
+  if (!st) return;
+  $('#mem-used').textContent = (st.usedPhys / GO).toFixed(1);
+  $('#mem-total').textContent = (st.totalPhys / GO).toFixed(1);
+  $('#mem-free').textContent = (st.availPhys / GO).toFixed(1);
+  const fill = $('#mem-fill');
+  fill.style.width = st.load + '%';
+  fill.className = 'mem-fill' + (st.load >= 85 ? ' high' : st.load >= 70 ? ' warn' : '');
+}
+
+async function refreshMemory() {
+  renderMemory(await window.satella.memory.status());
+}
+
+$('#mem-optimize').addEventListener('click', async () => {
+  const btn = $('#mem-optimize');
+  btn.disabled = true;
+  $('#mem-result').textContent = 'Libération en cours...';
+  const res = await window.satella.memory.optimize();
+  btn.disabled = false;
+  if (!res.ok) {
+    $('#mem-result').textContent = 'Impossible : ' + (res.error || 'erreur inconnue');
+    return;
+  }
+  renderMemory(res.after);
+  const mo = Math.round(res.freed / 1048576);
+  $('#mem-result').textContent = mo > 0
+    ? `${(res.freed / GO).toFixed(2)} Go libérés · ${res.processes} processus`
+    + (res.systemPurged ? ' · cache système purgé' : ' · cache système non purgé (admin requis)')
+    : `Rien à libérer pour l'instant · ${res.processes} processus traités`;
+});
+
+$('#mem-auto').addEventListener('change', (e) => {
+  window.satella.settings.set({ autoOptimize: e.target.checked });
+});
+$('#mem-threshold').addEventListener('input', (e) => {
+  $('#mem-threshold-val').textContent = e.target.value + '%';
+});
+$('#mem-threshold').addEventListener('change', (e) => {
+  window.satella.settings.set({ autoOptimizeThreshold: +e.target.value });
+});
+
+/* ================= Paramètres ================= */
+function renderSettings(s) {
+  SETTINGS = s;
+  $('#set-leds').checked = s.ledsEnabled;
+  $('#set-macros').checked = s.macrosEnabled;
+  $('#mem-auto').checked = s.autoOptimize;
+  $('#mem-threshold').value = s.autoOptimizeThreshold;
+  $('#mem-threshold-val').textContent = s.autoOptimizeThreshold + '%';
+  // Pages sans objet quand le module est coupé
+  $$('.nav-btn').forEach((b) => {
+    const p = b.dataset.page;
+    if (p === 'keyboard' || p === 'mouse') b.style.display = s.ledsEnabled ? '' : 'none';
+    if (p === 'macros') b.style.display = s.macrosEnabled ? '' : 'none';
+  });
+  const active = $('.nav-btn.active');
+  if (active && active.style.display === 'none') showPage('home');
+}
+
+$('#set-leds').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ ledsEnabled: e.target.checked }));
+  toast(e.target.checked ? 'Gestion des LED activée.' : 'Gestion des LED désactivée.');
+});
+$('#set-macros').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ macrosEnabled: e.target.checked }));
+  toast(e.target.checked ? 'Macros activées.' : 'Macros désactivées.');
+});
+
+async function refreshFootprint() {
+  const st = await window.satella.memory.status();
+  if (!st) return;
+  $('#set-footprint').textContent =
+    `Mémoire vive du système : ${(st.usedPhys / GO).toFixed(1)} Go utilisés sur `
+    + `${(st.totalPhys / GO).toFixed(1)} Go (${st.load}%). `
+    + `Modules actifs : ${[SETTINGS.ledsEnabled && 'LED', SETTINGS.macrosEnabled && 'macros']
+      .filter(Boolean).join(', ') || 'aucun'}.`;
+}
+
 /* ================= Initialisation ================= */
 async function init() {
   const data = await window.satella.init();
@@ -1155,6 +1248,10 @@ async function init() {
   KEY_LABELS = data.keyLabels;
   CAPS = data.capabilities;
   $('#app-version').textContent = data.version || '?';
+  renderSettings(data.settings || SETTINGS);
+  if (!data.memoryAvailable) {
+    $('#mem-panel').innerHTML = '<p class="muted">Optimiseur indisponible sur ce système.</p>';
+  }
 
   buildKeyboard();
   buildMouse();
@@ -1181,6 +1278,13 @@ async function init() {
     if (el) el.classList.toggle('playing', playing);
   });
   window.satella.macros.onPlayError(({ message }) => toast('Erreur macro : ' + message, 4000));
+  window.satella.settings.onChanged(renderSettings);
+  window.satella.memory.onAuto((res) => {
+    if (res && res.ok && res.freed > 0) {
+      toast(`Nettoyage automatique : ${(res.freed / GO).toFixed(2)} Go libérés.`);
+      if ($('#page-optimizer').classList.contains('active')) renderMemory(res.after);
+    }
+  });
 
   window.satella.ready();
 }

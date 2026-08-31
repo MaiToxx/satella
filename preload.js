@@ -48,6 +48,18 @@ contextBridge.exposeInMainWorld('satella', {
     onKeyActivity: on('macro:key-activity'),
   },
 
+  memory: {
+    status: () => ipcRenderer.invoke('memory:status'),
+    optimize: () => ipcRenderer.invoke('memory:optimize'),
+    onAuto: on('memory:auto'),
+  },
+
+  settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+    set: (patch) => ipcRenderer.invoke('settings:set', patch),
+    onChanged: on('settings:changed'),
+  },
+
   calib: {
     light: (slot) => ipcRenderer.invoke('calib:light', slot),
     finish: (map) => ipcRenderer.invoke('calib:finish', map),

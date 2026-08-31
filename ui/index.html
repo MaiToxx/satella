@@ -37,6 +37,14 @@
           <svg class="icon" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
           Profils
         </button>
+        <button class="nav-btn" data-page="optimizer">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 11v2M11 11v2M15 11v2M19 11v2"/></svg>
+          Optimiseur
+        </button>
+        <button class="nav-btn" data-page="settings">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+          Paramètres
+        </button>
       </nav>
       <div id="backend-badge"></div>
     </aside>
@@ -233,6 +241,72 @@
           <button id="profile-save" class="btn primary">Sauvegarder le profil actuel</button>
         </div>
         <div class="panel" id="profile-list"></div>
+      </section>
+
+      <!-- OPTIMISEUR -->
+      <section class="page" id="page-optimizer">
+        <div class="page-head">
+          <div class="eyebrow">Système</div>
+          <h1>Optimiseur mémoire</h1>
+          <p class="hint">Libère la mémoire vive occupée par les processus inactifs et purge le cache
+            du système, sans redémarrer quoi que ce soit.</p>
+        </div>
+        <div class="panel" id="mem-panel">
+          <div class="mem-figure">
+            <div class="mem-value"><span id="mem-used">0</span><span class="mem-unit"> Go utilisés</span></div>
+            <div class="mem-sub"><span id="mem-total">0</span> Go au total · <span id="mem-free">0</span> Go libres</div>
+            <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
+          </div>
+          <div class="btn-row" style="margin-top:20px">
+            <button class="btn primary" id="mem-optimize">Libérer la mémoire</button>
+            <span class="muted" id="mem-result"></span>
+          </div>
+        </div>
+        <h2>Nettoyage automatique</h2>
+        <div class="panel">
+          <label class="check"><input type="checkbox" id="mem-auto">
+            Libérer automatiquement la mémoire quand l'utilisation dépasse un seuil</label>
+          <div class="btn-row" style="margin-top:12px">
+            <label class="muted" style="font-size:13px">Seuil</label>
+            <input type="range" id="mem-threshold" min="50" max="95" value="80">
+            <span class="muted" id="mem-threshold-val" style="font-family:var(--font-mono)">80%</span>
+          </div>
+          <p class="muted" style="margin-top:10px;font-size:12.5px">
+            Vérification toutes les minutes. Le nettoyage complet (cache système) demande que
+            Satella soit lancée en administrateur ; sinon seuls les processus sont traités.</p>
+        </div>
+      </section>
+
+      <!-- PARAMETRES -->
+      <section class="page" id="page-settings">
+        <div class="page-head">
+          <div class="eyebrow">Configuration</div>
+          <h1>Paramètres</h1>
+          <p class="hint">Désactive les modules dont tu ne te sers pas : leurs ressources sont
+            libérées immédiatement (minuteries, écoute clavier, connexions USB).</p>
+        </div>
+        <div class="panel">
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Gestion des LED</div>
+              <div class="setting-desc">Effets, éclairage par touche et pilotage USB du clavier et de la souris.
+                Désactivé, le clavier garde son dernier effet en mémoire.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-leds"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Macros</div>
+              <div class="setting-desc">Déclencheurs globaux et lecture des macros.
+                Désactivé, les raccourcis ne répondent plus et les macros restent enregistrées.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-macros"><span></span></label>
+          </div>
+        </div>
+        <h2>Empreinte mémoire de Satella</h2>
+        <div class="panel">
+          <p class="muted" id="set-footprint">Mesure en cours...</p>
+        </div>
       </section>
     </main>
   </div>
