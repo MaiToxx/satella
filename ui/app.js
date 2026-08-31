@@ -183,7 +183,10 @@ function onKeyClick(id, e) {
 }
 
 function refreshSelection() {
-  $$('.kb-key').forEach((el) => el.classList.toggle('selected', kbSelection.has(el.dataset.id)));
+  $$('.kb-key').forEach((el) => {
+    el.classList.toggle('selected', kbSelection.has(el.dataset.id));
+    setKeyVisual(el, lastFrame && lastFrame.keyboard[el.dataset.id]);
+  });
   $('#kb-sel-count').textContent = kbSelection.size;
 }
 
@@ -383,12 +386,24 @@ function buildHomePreviews() {
   }
 }
 
+// Halo lumineux de la touche (diffusion des LEDs) + anneau de sélection
+function setKeyVisual(el, rgb) {
+  const parts = [];
+  if (el.classList.contains('selected')) parts.push('0 0 0 1px #fff inset');
+  if (rgb) {
+    const lum = rgb[0] + rgb[1] + rgb[2];
+    if (lum > 45) parts.push(`0 0 ${Math.round(6 + lum / 55)}px 1px rgba(${rgb[0]},${rgb[1]},${rgb[2]},.5)`);
+  }
+  el.style.boxShadow = parts.join(', ');
+}
+
 function applyFrame(frame) {
   lastFrame = frame;
-  // Clavier
   $$('.kb-key').forEach((el) => {
     const rgb = frame.keyboard[el.dataset.id];
-    if (rgb) el.firstElementChild.style.background = rgbCss(rgb);
+    if (!rgb) return;
+    el.firstElementChild.style.background = rgbCss(rgb);
+    setKeyVisual(el, rgb);
   });
   // Souris
   $$('.mouse-zone').forEach((el) => {
@@ -797,13 +812,23 @@ function renderCalibModal() {
   if (!calib) return;
   const last = calib.lastLabel
     ? `<p class="muted" style="margin-top:8px">Dernière touche associée : ${calib.lastLabel}</p>` : '';
+  const options = LAYOUT.keyboard.map((k) => {
+    const label = keyLabel(k.id) + (calib.map[k.id] !== undefined ? ' (déjà associée)' : '');
+    return `<option value="${k.id}">${label}</option>`;
+  }).join('');
   $('#modal').innerHTML = `
     <h3>${svg('key', 'icon')} Calibration (${calib.slot + 1} / ${CALIB_TOTAL})</h3>
     <p>Une touche de ton clavier vient de s'allumer en <b>vert</b>.
        Presse cette touche. S'il n'y a aucune touche allumée, clique sur Passer.</p>
     <p class="muted" style="margin-top:8px">${calib.mapped} touche(s) associée(s) pour l'instant.</p>
     ${last}
-    <div class="btn-row" style="margin-top:16px">
+    <div class="btn-row" style="margin-top:14px">
+      <select id="calib-manual-key">${options}</select>
+      <button class="btn small" id="calib-manual">Associer manuellement</button>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin-top:4px">
+      Pour une touche muette comme Fn : choisis son nom ci-dessus puis Associer.</p>
+    <div class="btn-row" style="margin-top:14px">
       <button class="btn primary" id="calib-skip">Passer (rien d'allumé)</button>
       <button class="btn" id="calib-finish">Terminer et enregistrer</button>
       <button class="btn danger" id="calib-cancel">Annuler</button>
@@ -811,6 +836,13 @@ function renderCalibModal() {
   $('#calib-skip').addEventListener('click', () => calibAdvance());
   $('#calib-finish').addEventListener('click', () => calibStop(true));
   $('#calib-cancel').addEventListener('click', () => calibStop(false));
+  $('#calib-manual').addEventListener('click', () => {
+    const id = $('#calib-manual-key').value;
+    calib.map[id] = calib.slot;
+    calib.mapped = Object.keys(calib.map).length;
+    calib.lastLabel = `${keyLabel(id)} (emplacement ${calib.slot}, manuel)`;
+    calibAdvance();
+  });
 }
 
 async function calibAdvance() {

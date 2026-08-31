@@ -58,7 +58,7 @@
 
     row(5, 0, [
       ['lctrl', 'Ctrl', 1.25], ['lwin', 'Win', 1.25], ['lalt', 'Alt', 1.25],
-      ['space', '', 6.25], ['ralt', 'Alt'], ['fn', 'Fn'], ['rctrl', 'Ctrl'],
+      ['space', '', 5.25], ['ralt', 'Alt'], ['fn', 'Fn'], ['rctrl', 'Ctrl'],
       ['left', '←'], ['down', '↓'], ['right', '→'],
     ]),
     row(5, NP_X, [['np0', '0', 2], ['npdecimal', '.']]),

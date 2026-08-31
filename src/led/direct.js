@@ -17,6 +17,8 @@
 // indépendante pour Satella.
 
 const { EventEmitter } = require('events');
+const path = require('path');
+const { Worker } = require('worker_threads');
 
 let HID = null;
 let hidError = null;
@@ -176,8 +178,10 @@ class DirectBackend extends EventEmitter {
   }
 
   dropKeyboard() {
+    this.stopWorker();
     try { if (this.kb) this.kb.close(); } catch { /* ignore */ }
     this.kb = null;
+    this.kbStreaming = false;
     this.emit('status', this.status());
   }
 
@@ -333,12 +337,14 @@ class DirectBackend extends EventEmitter {
         state.brightness, state.direction, state.colors]);
       if (sig === this._lastKbSig) return;
       this._lastKbSig = sig;
-      try { this.pushKeyboard(state); }
-      catch (err) { this.emit('log', 'Erreur écriture clavier : ' + err.message); this.dropKeyboard(); }
+      this.pushKeyboard(state).catch((err) => {
+        this.emit('log', 'Erreur écriture clavier : ' + err.message);
+        this.dropKeyboard();
+      });
     }, 250);
   }
 
-  pushKeyboard(state) {
+  async pushKeyboard(state) {
     const bright = Math.round((state.brightness / 100) * 4);         // 0..4
     const speed = 5 - Math.round((state.speed / 100) * 5);           // 5 lent .. 0 rapide
     const [r, g, b] = hexToRgb(state.baseColor);
@@ -350,8 +356,10 @@ class DirectBackend extends EventEmitter {
       return;
     }
     if (this.kbStreaming) {
-      // Retour à un effet natif : sortir du mode dynamique
+      // Retour à un effet natif : suspendre le thread de flux puis sortir
+      // du mode dynamique avant d'écrire la configuration
       this.kbStreaming = false;
+      await this.pauseWorker();
       try { this.kbQuery(KB_CMD_DYNAMIC_END); } catch { /* déjà sorti */ }
     }
 
@@ -432,35 +440,64 @@ class DirectBackend extends EventEmitter {
   }
 
   // ---- Flux temps réel (effets logiciels) ---------------------------------
-  // colors : { keyId: [r,g,b] } calculé par le moteur d'effets.
-  // Chaque paquet attend l'accusé du firmware (régulation de débit : sans
-  // cela le clavier sature, perd des paquets, décale les couleurs et finit
-  // par décrocher du bus USB). Blocs de 54 octets = 18 couleurs entières.
+  // Les écritures USB vivent dans un thread dédié (stream-worker.js) : le
+  // processus principal ne fait que calculer les images et les poster. Le
+  // thread n'écrit que les blocs modifiés et fusionne les images en retard.
+  ensureWorker() {
+    if (this._worker || !this.kbInfo) return;
+    this._worker = new Worker(path.join(__dirname, 'stream-worker.js'), {
+      workerData: { path: this.kbInfo.path },
+    });
+    this._workerPaused = false;
+    this._worker.on('message', (msg) => {
+      if (msg.type === 'error') {
+        this.emit('log', 'Flux clavier interrompu : ' + msg.message);
+        this.stopWorker();
+      } else if (msg.type === 'paused' && this._pauseResolve) {
+        this._pauseResolve();
+        this._pauseResolve = null;
+      }
+    });
+    this._worker.on('exit', () => { this._worker = null; });
+  }
+
+  pauseWorker() {
+    if (!this._worker || this._workerPaused) return Promise.resolve();
+    this._workerPaused = true;
+    return new Promise((resolve) => {
+      this._pauseResolve = resolve;
+      this._worker.postMessage({ type: 'pause' });
+      setTimeout(resolve, 300); // filet de sécurité
+    });
+  }
+
+  stopWorker() {
+    if (!this._worker) return;
+    try { this._worker.postMessage({ type: 'stop' }); } catch { /* déjà mort */ }
+    this._worker = null;
+    this._workerPaused = false;
+  }
+
   streamKeyboard(colors) {
     if (!this.kb || this._calibTimer) return;
-    const now = Date.now();
-    if (now - (this._lastStream || 0) < 66) return; // 15 img/s max
-    this._lastStream = now;
+    this.ensureWorker();
+    if (!this._worker) return;
+    if (this._workerPaused) {
+      this._worker.postMessage({ type: 'resume' });
+      this._workerPaused = false;
+    }
     const mapSize = this.kbMapSize || 128;
-    const data = new Array(3 * mapSize).fill(0);
+    const data = new Uint8Array(3 * mapSize);
     for (const key of Object.keys(this.keyMap)) {
       const rgb = colors[key];
       if (!rgb) continue;
-      const slot = this.keyMap[key];
-      data[slot * 3] = rgb[0];
-      data[slot * 3 + 1] = rgb[1];
-      data[slot * 3 + 2] = rgb[2];
+      const slot = this.keyMap[key] * 3;
+      data[slot] = rgb[0];
+      data[slot + 1] = rgb[1];
+      data[slot + 2] = rgb[2];
     }
-    try {
-      for (let i = 0; i < data.length; i += 54) {
-        const chunk = data.slice(i, i + 54);
-        this.kbQuery(KB_CMD_DYNAMIC, i, chunk.length, chunk, true);
-      }
-      this.kbStreaming = true;
-    } catch (err) {
-      this.emit('log', 'Flux clavier interrompu : ' + err.message);
-      this.dropKeyboard();
-    }
+    this._worker.postMessage({ type: 'frame', data });
+    this.kbStreaming = true;
   }
 
   // ---- Calibration de la carte des touches --------------------------------
@@ -474,6 +511,8 @@ class DirectBackend extends EventEmitter {
   // réémet l'allumage tant que la calibration est en cours.
   kbCalibLight(slot) {
     if (!this.kb) throw new Error('clavier non connecté');
+    // Le flux d'effets ne doit pas écrire en même temps que la calibration
+    if (this._worker && !this._workerPaused) this.pauseWorker();
     this._calibSlot = slot;
     this.kbCalibPush();
     if (!this._calibTimer) {
@@ -521,6 +560,7 @@ class DirectBackend extends EventEmitter {
   }
 
   dispose() {
+    this.stopWorker();
     clearTimeout(this._kbTimer);
     clearTimeout(this._mouseTimer);
     clearInterval(this._calibTimer);

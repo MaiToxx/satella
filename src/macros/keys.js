@@ -82,10 +82,10 @@ const UIOHOOK_TO_NAME = {
   0x0048: 'np8', 0x0049: 'np9',
   0x0037: 'npmultiply', 0x004e: 'npadd', 0x004a: 'npsubtract',
   0x0053: 'npdecimal', 0x0e35: 'npdivide', 0x0e1c: 'npenter',
-  // Variantes du pavé quand Verr Num est éteint
+  // Variantes du pavé quand Verr Num est éteint (5 = touche « Clear »)
   0xee4f: 'np1', 0xee50: 'np2', 0xee51: 'np3', 0xee4b: 'np4',
-  0xee4d: 'np6', 0xee47: 'np7', 0xee48: 'np8', 0xee49: 'np9',
-  0xee52: 'np0', 0xee53: 'npdecimal',
+  0xee4c: 'np5', 0xee4d: 'np6', 0xee47: 'np7', 0xee48: 'np8',
+  0xee49: 'np9', 0xee52: 'np0', 0xee53: 'npdecimal',
   0x003b: 'f1', 0x003c: 'f2', 0x003d: 'f3', 0x003e: 'f4', 0x003f: 'f5',
   0x0040: 'f6', 0x0041: 'f7', 0x0042: 'f8', 0x0043: 'f9', 0x0044: 'f10',
   0x0057: 'f11', 0x0058: 'f12',

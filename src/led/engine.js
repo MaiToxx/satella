@@ -149,10 +149,15 @@ class LedEngine extends EventEmitter {
   }
 
   tick() {
-    this.t += 1 / FPS;
+    // Temps réel mesuré : si une image saute, l'animation garde sa vitesse
+    // au lieu de ralentir (fluidité indépendante de la cadence effective).
+    const now = Date.now();
+    const dt = this._lastTick ? Math.min(0.1, (now - this._lastTick) / 1000) : 1 / FPS;
+    this._lastTick = now;
     const kbAnim = this.isAnimated(this.state.keyboard.effect);
     const msAnim = this.isAnimated(this.state.mouse.effect);
     if (!kbAnim && !msAnim) return; // statique : rien à recalculer
+    this.t += dt;
     this.renderOnce();
   }
 
