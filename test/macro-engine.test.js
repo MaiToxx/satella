@@ -111,3 +111,23 @@ test('l’enregistreur fusionne les frappes et place le curseur avant les clics'
   ]);
   assert.deepEqual(taps.map((s) => s.type), ['keyTap', 'keyDown', 'delay', 'keyUp']);
 });
+
+test('étape « Ouvrir » : passe par l’ouvreur, même sans injection de touches', async () => {
+  const opened = [];
+  const injector = { ...fakeInput(), available: false, loadError: new Error('absente') };
+  const engine = new MacroEngine({ globalShortcut: fakeShortcuts(), injector, opener: async (t) => { opened.push(t); } });
+  engine.setMacros([
+    { id: 'o', enabled: true, steps: [{ type: 'open', target: 'https://example.com', gapMs: 0 }, { type: 'delay', ms: 5 }] },
+    { id: 'k', enabled: true, steps: [{ type: 'open', target: 'C:\\x.exe' }, { type: 'loop', count: 1, steps: [{ type: 'keyTap', key: 'a' }] }] },
+  ]);
+  await engine.play('o');
+  assert.deepEqual(opened, ['https://example.com']);
+  await assert.rejects(engine.play('k'), /Injection d'entrées indisponible/);
+});
+
+test('une erreur d’ouverture arrête la macro avec un message', async () => {
+  const { engine, errors } = make([]);
+  engine.opener = async () => { throw new Error('introuvable'); };
+  await engine.play('x', { id: 'x', steps: [{ type: 'open', target: 'C:\\nope.exe' }, { type: 'keyTap', key: 'a' }] });
+  assert.deepEqual(errors, ['introuvable']);
+});

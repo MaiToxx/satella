@@ -544,3 +544,14 @@ details > summary:hover { color: var(--text); }
 
 /* Profils */
 .profile-row.active { background: color-mix(in srgb, var(--accent) 5%, transparent); border-radius: 6px; }
+
+/* Notes de version (mises à jour, quoi de neuf) */
+.release-notes { font-size: 13px; line-height: 1.5; color: var(--text); }
+.release-notes h4 {
+  font-family: var(--font-display); font-size: 12px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  margin: 14px 0 6px;
+}
+.release-notes h4:first-child { margin-top: 4px; }
+.release-notes ul { padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.release-notes p { margin: 6px 0; }

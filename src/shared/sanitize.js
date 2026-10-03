@@ -6,13 +6,22 @@ const FORMAT = 'satella';
 const FORMAT_VERSION = 1;
 
 const KB_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'reactive', 'ripple', 'sparkle',
-  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'off'];
+  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'screen', 'off'];
 const MOUSE_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'sparkle', 'off'];
 const DIRECTIONS = ['lr', 'rl', 'tb', 'bt'];
 const BUTTONS = ['left', 'right', 'middle', 'x1', 'x2'];
 const STEP_TYPES = ['keyTap', 'keyDown', 'keyUp', 'text', 'delay', 'mouseClick', 'mouseDown',
-  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro'];
+  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro', 'open'];
 const MAX_LOOP_DEPTH = 8;
+
+// Cible d'une étape « Ouvrir » : lien web ou courriel, ou chemin Windows
+// absolu (C:\... ou \\serveur\...). Tout autre schéma est refusé.
+function openTarget(v) {
+  const s = typeof v === 'string' ? v.trim().slice(0, 1000) : '';
+  if (/^(https?:\/\/|mailto:)[^\s<>"]+$/i.test(s)) return s;
+  if (/^([a-zA-Z]:\\|\\\\[^\\])[^\r\n\t<>"|?*]*$/.test(s)) return s;
+  return '';
+}
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -108,6 +117,10 @@ function step(v, keyNames, depth) {
       out.macroId = id(v.macroId);
       if (!out.macroId) return null;
       break;
+    case 'open':
+      out.target = openTarget(v.target);
+      if (!out.target) return null;
+      break;
     default: return null;
   }
   return out;
@@ -202,7 +215,7 @@ function keymap(v) {
 const SETTING_TYPES = {
   ledsEnabled: 'boolean', macrosEnabled: 'boolean', autoOptimize: 'boolean',
   autoOptimizeThreshold: 'number', appProfiles: 'boolean', idleOff: 'boolean',
-  idleMinutes: 'number', autoCheckUpdates: 'boolean', offOnLock: 'boolean',
+  idleMinutes: 'number', autoCheckUpdates: 'boolean', autoInstallUpdates: 'boolean', offOnLock: 'boolean',
   flashOnMacro: 'boolean',
 };
 function settingsPatch(v) {
@@ -272,7 +285,25 @@ function makeExport(kind, payload, appVersion) {
   return JSON.stringify(doc, null, 2);
 }
 
+// Cibles des étapes « Ouvrir » contenues dans des macros (boucles comprises)
+function openTargets(list) {
+  const out = [];
+  const walk = (steps) => (steps || []).forEach((s) => {
+    if (s.type === 'open') out.push(s.target);
+    if (s.type === 'loop') walk(s.steps);
+  });
+  (list || []).forEach((m) => walk(m.steps));
+  return out;
+}
+
+// Mêmes macros sans aucune étape « Ouvrir »
+function stripOpenSteps(list) {
+  const clean = (steps) => (steps || []).filter((s) => s.type !== 'open')
+    .map((s) => (s.type === 'loop' ? { ...s, steps: clean(s.steps) } : s));
+  return (list || []).map((m) => ({ ...m, steps: clean(m.steps) }));
+}
+
 module.exports = {
   parseImport, makeExport, ledState, macro, macros, profile, snippet, turbo, keymap, settingsPatch,
-  KB_EFFECTS, MOUSE_EFFECTS,
+  openTarget, openTargets, stripOpenSteps, KB_EFFECTS, MOUSE_EFFECTS,
 };

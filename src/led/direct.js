@@ -58,7 +58,7 @@ const KB_MODES = {
 // Effets logiciels : calculés par le moteur de Satella et diffusés en continu
 // vers le clavier via le mode dynamique (aucune écriture en flash).
 const SOFT_EFFECTS = new Set(['ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
-  'sysmon', 'audio']);
+  'sysmon', 'audio', 'screen']);
 
 // Effets natifs animés : avec un calque de touches fixes par-dessus, le
 // clavier ne sait pas les combiner ; Satella les calcule et les diffuse

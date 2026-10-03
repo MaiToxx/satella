@@ -26,6 +26,21 @@ jobs:
       - name: Tests unitaires
         run: node --test "test/*.test.js"
 
+  # Sur une pull request et sur main : l'application lancée pour de vrai
+  # (Electron sous écran virtuel) et pilotée comme par un utilisateur
+  e2e:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test de bout en bout
+        run: xvfb-run -a npm run test:e2e
+
   # Sur une pull request : tests sous Windows avec les vrais modules natifs,
   # puis construction de l'installeur (sans publication), téléchargeable
   # pendant 7 jours depuis la page du run pour l'essayer avant de publier.

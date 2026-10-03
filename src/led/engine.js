@@ -72,6 +72,11 @@ function gaugeColor(f) {
 
 const AUDIO_BANDS = 16;
 
+// Ambiance écran : l'écran est découpé en une grille de couleurs moyennes,
+// projetée sur le clavier (colonnes et rangées)
+const SCREEN_COLS = 20;
+const SCREEN_ROWS = 6;
+
 const DEFAULT_DEVICE_STATE = () => ({
   effect: 'static',        // static | breathing | wave | rainbow | reactive | sparkle | off | effets logiciels
   baseColor: '#00a8ff',
@@ -100,6 +105,8 @@ class LedEngine extends EventEmitter {
     this.stats = { cpu: 0, ram: 0 };                // jauge système (0..1)
     this.audio = new Array(AUDIO_BANDS).fill(0);    // spectre lissé (0..1)
     this.audioTarget = new Array(AUDIO_BANDS).fill(0);
+    this.screen = new Float32Array(SCREEN_COLS * SCREEN_ROWS * 3);       // couleurs lissées
+    this.screenTarget = new Uint8Array(SCREEN_COLS * SCREEN_ROWS * 3);   // dernière capture
     this.flashState = null;        // { rgb, t0, ms }
     this.keyIndex = new Map(layout.keyboard.map((k) => [k.id, k]));
     // Consommateurs d'images : sans aperçu visible ni flux vers le
@@ -143,6 +150,13 @@ class LedEngine extends EventEmitter {
   setAudioBands(bands) {
     if (!Array.isArray(bands)) return;
     for (let i = 0; i < AUDIO_BANDS; i++) this.audioTarget[i] = clamp01(Number(bands[i]) || 0);
+  }
+
+  // Grille de couleurs de l'écran : SCREEN_ROWS x SCREEN_COLS x [r, g, b]
+  setScreenGrid(grid) {
+    if (!grid || typeof grid.length !== 'number') return;
+    const n = Math.min(grid.length, this.screenTarget.length);
+    for (let i = 0; i < n; i++) this.screenTarget[i] = Math.max(0, Math.min(255, Number(grid[i]) || 0));
   }
 
   // Flash bref de tout le clavier (retour visuel des macros)
@@ -209,7 +223,7 @@ class LedEngine extends EventEmitter {
   isAnimated(effect) {
     return ['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
       'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
-      'sysmon', 'audio'].includes(effect);
+      'sysmon', 'audio', 'screen'].includes(effect);
   }
 
   tick() {
@@ -257,6 +271,15 @@ class LedEngine extends EventEmitter {
       for (let i = 0; i < AUDIO_BANDS; i++) {
         const target = this.audioTarget[i];
         this.audio[i] = target >= this.audio[i] ? target : Math.max(target, this.audio[i] - 1.6 * elapsed);
+      }
+    }
+
+    // Ambiance écran : transition douce vers la dernière capture (la vitesse
+    // règle la réactivité)
+    if (st.effect === 'screen') {
+      const k = Math.min(1, elapsed * (2 + speed * 8));
+      for (let i = 0; i < this.screen.length; i++) {
+        this.screen[i] += (this.screenTarget[i] - this.screen[i]) * k;
       }
     }
 
@@ -387,6 +410,14 @@ class LedEngine extends EventEmitter {
           rgb = level >= height ? lerpRgb(base, color2, height) : scale(base, 0.04);
           break;
         }
+        case 'screen': {
+          const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
+          const col = Math.min(SCREEN_COLS - 1, Math.floor((cx / layout.bounds.w) * SCREEN_COLS));
+          const row = Math.min(SCREEN_ROWS - 1, Math.floor((cy / layout.bounds.h) * SCREEN_ROWS));
+          const i = (row * SCREEN_COLS + col) * 3;
+          rgb = [Math.round(this.screen[i]), Math.round(this.screen[i + 1]), Math.round(this.screen[i + 2])];
+          break;
+        }
         default:
           rgb = base;
       }
@@ -457,4 +488,4 @@ class LedEngine extends EventEmitter {
   }
 }
 
-module.exports = { LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS };
+module.exports = { LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS, SCREEN_COLS, SCREEN_ROWS };

@@ -1,14 +1,9 @@
-## Corrections
-- Profils : le profil actif enregistre chaque modification d'éclairage ou de macro ; une bascule automatique ne perd plus rien (les réglages faits hors profil sont mis de côté dans « Réglages non sauvegardés »).
-- Une macro arrêtée relâche toujours ses touches et boutons ; les appels de macros en boucle sont refusés ; « Tester » joue la version affichée, même non sauvegardée.
-- Une seule instance de Satella ; un clavier rebranché ou une sortie de veille reçoit à nouveau les réglages en cours.
-- Texte sur plusieurs lignes (vrais appuis sur Entrée), souris sur plusieurs écrans, raccourcis refusés signalés.
-
 ## Nouveautés
-- Calque : des touches fixes par-dessus n'importe quel effet.
-- Effets Jauge système et Visualiseur audio ; flash du clavier optionnel pour les macros et turbos.
-- Expansion de texte selon la disposition active (AZERTY, accents, AltGr).
-- Éditeur de macros : glisser-déposer, annuler/rétablir, boucles sur plusieurs niveaux, délais aléatoires, durée d'appui (jeux).
-- Profils : renommage, export/import, sauvegarde complète de toutes les données.
-- Zone de notification : clic simple, choix du profil, extinction des LED ; LED éteintes au verrouillage (option).
-- Paramètres > Dépannage : rapport de diagnostic et journaux.
+- Effet « Ambiance écran » : le clavier reprend les couleurs de l'écran principal, zone par zone (films, jeux). La vitesse règle la réactivité.
+- Étape de macro « Ouvrir » : lancer un programme, ouvrir un fichier ou un lien (Discord, OBS, une page web…). À l'import d'un fichier partagé, ces étapes ne sont gardées qu'avec ton accord.
+- Mises à jour : les nouveautés sont consultables avant de télécharger, la vérification se refait toutes les 6 heures, et l'installation automatique peut être activée (Paramètres). Après une mise à jour, cet écran « Quoi de neuf » s'affiche une fois.
+- Zone de notification : « Installer et redémarrer » dès qu'une mise à jour est prête.
+
+## Corrections
+- Une macro qui ne fait qu'ouvrir et attendre fonctionne même si l'envoi de touches est indisponible.
+- Les captures (visualiseur audio, ambiance écran) visent l'écran principal et ne demandent le son que lorsqu'il sert.

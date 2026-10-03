@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('satella', {
   diagnostic: () => ipcRenderer.invoke('app:diagnostic'),
   openLogs: () => ipcRenderer.invoke('app:openLogs'),
   openData: () => ipcRenderer.invoke('app:openData'),
+  pickFile: () => ipcRenderer.invoke('dialog:pickFile'),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
@@ -35,11 +36,13 @@ contextBridge.exposeInMainWorld('satella', {
     onDimmed: on('leds:dimmed'),
   },
 
-  // Visualiseur audio : le spectre calculé dans l'interface part vers le moteur
-  audio: {
+  // Effets capturés dans l'interface (son, écran) : les données calculées
+  // partent vers le moteur
+  capture: {
     sendBands: (bands) => ipcRenderer.send('audio:bands', bands),
-    reportError: (message) => ipcRenderer.send('audio:error', message),
-    onStop: on('audio:stop'),
+    sendGrid: (grid) => ipcRenderer.send('screen:grid', grid),
+    reportError: (kind, message) => ipcRenderer.send('capture:error', kind, message),
+    onStop: on('capture:stop'),
   },
 
   devices: {

@@ -1,0 +1,311 @@
+// Test de bout en bout : l'application est lancée pour de vrai (Electron)
+// et pilotée comme par un utilisateur, sans matériel. Dossier de données
+// temporaire (SATELLA_USER_DATA) : les vraies données ne sont jamais touchées.
+//   npm run test:e2e            (Linux : xvfb-run -a npm run test:e2e)
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+let electron = null;
+try {
+  electron = require('playwright-core')._electron;
+} catch { /* dépendance de développement absente */ }
+
+const APP = path.resolve(__dirname, '..', '..');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function launch(dataDir) {
+  return electron.launch({
+    executablePath: require('electron'),
+    args: [APP, '--no-sandbox', '--disable-gpu'],
+    env: { ...process.env, SATELLA_USER_DATA: dataDir },
+  });
+}
+
+async function firstPage(app) {
+  const page = await app.firstWindow();
+  await page.waitForSelector('.kb-key', { state: 'attached' });
+  await sleep(600);
+  return page;
+}
+
+// Glisser-déposer HTML5 réaliste (déplacements progressifs de la souris)
+async function drag(page, from, to) {
+  await to.scrollIntoViewIfNeeded();
+  const a = await from.boundingBox();
+  const b = await to.boundingBox();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(a.x + 5 + ((b.x + 30 - a.x) * i) / 12, a.y + ((b.y + 10 - a.y) * i) / 12);
+  }
+  await page.mouse.up();
+  await sleep(200);
+}
+
+test('parcours complet de l’interface', { skip: !electron && 'playwright-core absent', timeout: 240000 }, async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'satella-e2e-'));
+  const failures = [];
+  const check = (name, cond, extra = '') => { if (!cond) failures.push(`${name}${extra ? ' — ' + extra : ''}`); };
+
+  const app = await launch(data);
+  const page = await firstPage(app);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  try {
+    // ---- Instance unique ----
+    const second = await launch(data).catch(() => null);
+    if (second) {
+      const code = await new Promise((r) => {
+        second.process().on('exit', (c) => r(c));
+        setTimeout(() => r('vivante'), 8000);
+      });
+      check('une deuxième instance quitte aussitôt', code !== 'vivante');
+      if (code === 'vivante') await second.close();
+    }
+
+    // ---- Macros : étapes, boucles imbriquées, annuler/rétablir ----
+    await page.click('.nav-btn[data-page="macros"]');
+    await page.click('#macro-new');
+    await page.fill('#me-name', '<img src=x onerror="window.__xss=1">Test');
+    await page.click('#me-add-bar button:has-text("Touche")');
+    await page.selectOption('#sf-key', 'a');
+    await page.click('#sf-ok');
+    await page.click('#me-add-bar button:has-text("Boucle")');
+    await page.fill('#sf-count', '3');
+    await page.click('#sf-ok');
+    await page.click('.add-row .add-step-bar button:has-text("Boucle")');
+    await page.click('#sf-ok');
+    await page.click('.add-row >> nth=0 >> .add-step-bar button:has-text("Texte")');
+    await page.fill('#sf-text', 'ligne 1\nligne 2 <b>gras</b>');
+    await page.click('#sf-ok');
+    check('étapes ajoutées, boucle imbriquée comprise', (await page.textContent('#me-steps-count')) === '4');
+    const indents = await page.evaluate(() => [...document.querySelectorAll('#me-steps .step-row:not(.add-row)')]
+      .map((r) => r.style.marginLeft || '0'));
+    check('indentation par niveau', JSON.stringify(indents) === '["0","0","28px","56px"]', JSON.stringify(indents));
+    check('indicateur « non sauvegardé »', (await page.textContent('#me-unsaved')).includes('non sauvegard'));
+    await page.keyboard.press('Control+z');
+    check('Ctrl+Z annule', (await page.textContent('#me-steps-count')) === '3');
+    await page.keyboard.press('Control+y');
+    check('Ctrl+Y rétablit', (await page.textContent('#me-steps-count')) === '4');
+    check('nom hostile affiché comme du texte', (await page.evaluate(() => window.__xss)) === undefined
+      && (await page.textContent('.macro-item .m-name')).includes('<img src=x'));
+    const descs = await page.evaluate(() => [...document.querySelectorAll('.s-desc')].map((e) => e.textContent).join('|'));
+    check('texte d’étape échappé', descs.includes('<b>gras</b>'), descs);
+
+    // Glisser-déposer : la touche à la fin de la boucle externe
+    await drag(page, page.locator('#me-steps .step-row:not(.add-row) .s-grip').first(),
+      page.locator('#me-steps .add-row').last());
+    const order = await page.evaluate(() => [...document.querySelectorAll('#me-steps .step-row:not(.add-row) .s-type')]
+      .map((e) => e.textContent));
+    check('glisser-déposer', order[0] === 'Boucle', JSON.stringify(order));
+
+    // Étape « Ouvrir » : cible refusée, puis lien valide joué via l'ouvreur
+    await page.click('#me-add-bar button:has-text("Ouvrir")');
+    await page.fill('#sf-target', 'powershell -c evil');
+    await page.click('#sf-ok');
+    check('cible « Ouvrir » invalide refusée', (await page.textContent('#toast')).includes('Indique un lien'));
+    await page.fill('#sf-target', 'https://example.com/satella');
+    await page.click('#sf-ok');
+    await app.evaluate(({ shell }) => {
+      global.__opened = [];
+      shell.openExternal = async (u) => { global.__opened.push(u); };
+    });
+    await page.click('#macro-new');
+    await page.fill('#me-name', 'Ouvrir seulement');
+    await page.click('#me-add-bar button:has-text("Ouvrir")');
+    await page.fill('#sf-target', 'https://example.com/seul');
+    await page.click('#sf-ok');
+    await page.click('#me-play');
+    await sleep(400);
+    const opened = await app.evaluate(() => global.__opened);
+    check('macro « Ouvrir » jouée sans injection de touches', JSON.stringify(opened) === '["https://example.com/seul"]',
+      JSON.stringify(opened));
+    await page.click('#me-save');
+    await page.locator('.macro-item', { hasText: 'onerror' }).click();
+
+    // Tester une macro non sauvegardée : l'erreur remonte (pas d'injection ici)
+    await page.click('#me-play');
+    await sleep(300);
+    const t = await page.textContent('#toast');
+    check('« Tester » joue le brouillon', t.includes('Lecture impossible') && !t.includes('introuvable'), t);
+
+    // Déclencheur + doublon signalé
+    await page.click('#me-trigger');
+    await page.keyboard.press('Control+Alt+KeyK');
+    await page.click('#me-save');
+    await sleep(300);
+    check('sauvegarde', (await page.textContent('#me-unsaved')) === '');
+    await page.click('#macro-new');
+    await page.fill('#me-name', 'Doublon');
+    await page.click('#me-trigger');
+    await page.keyboard.press('Control+Alt+KeyK');
+    await sleep(100);
+    check('doublon signalé à la saisie', (await page.textContent('#toast')).includes('déjà utilisé'));
+    await page.click('#me-save');
+    await sleep(400);
+    check('raccourci refusé signalé', (await page.locator('.macro-item.active .m-warn').count()) === 1);
+
+    // Cycle impossible à créer
+    await page.click('#me-add-bar button:has-text("Exécuter macro")');
+    await page.selectOption('#sf-macro', { label: '<img src=x onerror="window.__xss=1">Test' });
+    await page.click('#sf-ok');
+    await page.click('#me-save');
+    await sleep(200);
+    await page.locator('.macro-item', { hasText: 'onerror' }).click();
+    await page.click('#me-add-bar button:has-text("Exécuter macro")');
+    const proposed = await page.evaluate(() => [...document.querySelectorAll('#sf-macro option')].map((o) => o.textContent));
+    check('cycle A -> B -> A impossible', !proposed.includes('Doublon'), JSON.stringify(proposed));
+    await page.click('#sf-cancel');
+
+    // ---- Profils ----
+    await page.click('.nav-btn[data-page="profiles"]');
+    await page.fill('#profile-name', 'Bureau');
+    await page.click('#profile-save');
+    await sleep(300);
+    check('profil sauvegardé actif', (await page.locator('.profile-row.active').count()) === 1
+      && (await page.textContent('.side-profile')).includes('Bureau'));
+    await page.click('.nav-btn[data-page="keyboard"]');
+    await page.click('#kb-effects button[data-fx="rainbow"]');
+    await sleep(1300);
+    let prof = await page.evaluate(() => window.satella.profiles.list());
+    check('profil actif mis à jour en continu', prof.profiles[0].ledState.keyboard.effect === 'rainbow');
+
+    // Calque
+    await page.click('.kb-key[data-id="w"]');
+    await page.click('.kb-key[data-id="a"]', { modifiers: ['Control'] });
+    await page.click('#kb-overlay-add');
+    await sleep(1300);
+    prof = await page.evaluate(() => window.satella.profiles.list());
+    check('calque enregistré', Object.keys(prof.profiles[0].ledState.keyboard.overlay || {}).sort().join() === 'a,w');
+    check('repère du calque', (await page.locator('.kb-key.in-overlay').count()) === 2);
+
+    // Effets logiciels
+    await page.click('#kb-effects button[data-fx="sysmon"]');
+    await sleep(1500);
+    check('jauge système dessinée', !!(await page.evaluate(() =>
+      document.querySelector('.kb-key[data-id="f1"] .led').style.background)));
+    await page.click('#kb-effects button[data-fx="screen"]');
+    await sleep(2500);
+    const frames = await page.evaluate(() => window.__satellaScreen.framesSent);
+    check('ambiance écran : capture en cours', frames >= 5, `${frames} images`);
+    await page.click('#kb-effects button[data-fx="static"]');
+    await sleep(400);
+    const f1 = await page.evaluate(() => window.__satellaScreen.framesSent);
+    await sleep(500);
+    check('ambiance écran : capture arrêtée en changeant d’effet',
+      (await page.evaluate(() => window.__satellaScreen.framesSent)) === f1);
+
+    // Renommage, réglages mis de côté avant un autre profil
+    await page.click('.nav-btn[data-page="profiles"]');
+    await page.click('.p-rename');
+    await page.fill('#ask-input', 'Bureau perso');
+    await page.click('#ask-ok');
+    await sleep(300);
+    check('renommage du profil actif', (await page.textContent('.side-profile')).includes('Bureau perso'));
+    await page.fill('#profile-name', 'Jeu');
+    await page.click('#profile-save');
+    await sleep(200);
+    page.once('dialog', (d) => d.accept());
+    await page.click('.profile-row.active .p-del');
+    await sleep(300);
+    await page.click('.nav-btn[data-page="keyboard"]');
+    await page.click('#kb-effects button[data-fx="fire"]');
+    await sleep(300);
+    await page.click('.nav-btn[data-page="profiles"]');
+    await page.click('.profile-row .p-load');
+    await sleep(500);
+    prof = await page.evaluate(() => window.satella.profiles.list());
+    const backup = prof.profiles.find((p) => p.name === 'Réglages non sauvegardés');
+    check('réglages hors profil mis de côté', backup && backup.ledState.keyboard.effect === 'fire');
+    check('profil chargé actif', prof.active === 'Bureau perso');
+
+    // ---- Export / import (boîtes de dialogue simulées) ----
+    const file = path.join(data, 'export-test.satella');
+    await app.evaluate(({ dialog }, f) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: f });
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] });
+      global.__boxes = [];
+      dialog.showMessageBox = async (w, o) => { global.__boxes.push((o || w).message); return { response: 0 }; };
+    }, file);
+    await page.click('.profile-row.active .p-export');
+    await sleep(300);
+    const exported = JSON.parse(fs.readFileSync(file, 'utf8'));
+    check('export d’un profil', exported.format === 'satella' && exported.kind === 'profile');
+    exported.profile.name = 'Importé <script>';
+    exported.profile.isDefault = true;
+    exported.profile.macros[0].name = '<img src=x onerror="window.__xss2=1">';
+    exported.profile.macros[0].steps.push({ type: 'evil' }, { type: 'open', target: 'https://piege.example' });
+    fs.writeFileSync(file, JSON.stringify(exported));
+    await page.click('#data-import');
+    await sleep(400);
+    prof = await page.evaluate(() => window.satella.profiles.list());
+    const imp = prof.profiles.find((p) => p.name === 'Importé <script>');
+    const boxes = await app.evaluate(() => global.__boxes);
+    check('import : confirmation pour les étapes « Ouvrir »', boxes.some((m) => m.includes('ouvrent des programmes')));
+    check('import nettoyé (étapes « Ouvrir » retirées sur demande)', imp && !imp.isDefault
+      && !JSON.stringify(imp.macros).includes('"open"') && !JSON.stringify(imp.macros).includes('evil'));
+    check('aucun script exécuté à l’import', (await page.evaluate(() => window.__xss2)) === undefined);
+    await page.click('#data-export-all');
+    await sleep(300);
+    check('sauvegarde complète', JSON.parse(fs.readFileSync(file, 'utf8')).kind === 'backup');
+    await page.click('#data-import');
+    await sleep(600);
+    check('restauration', (await page.textContent('#toast')).includes('restaurée'));
+
+    // ---- Paramètres, diagnostic, extinction ----
+    await page.click('.nav-btn[data-page="settings"]');
+    await page.click('#set-offlock + span');
+    await page.click('#set-flash + span');
+    await page.click('#set-autoinstall + span');
+    await sleep(200);
+    const st = await page.evaluate(() => window.satella.settings.get());
+    check('réglages enregistrés', st.offOnLock && st.flashOnMacro && st.autoInstallUpdates);
+    await page.click('#diag-copy');
+    await sleep(300);
+    const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
+    check('diagnostic copié', clip.includes('Satella') && clip.includes('Fin du journal'));
+    await page.click('#leds-toggle');
+    await sleep(200);
+    check('extinction des LED', (await page.textContent('#leds-toggle')).includes('rallumer'));
+    await page.click('#leds-toggle');
+
+    // Turbo en conflit avec une macro
+    await page.click('.nav-btn[data-page="macros"]');
+    await page.click('#turbo-add');
+    await sleep(200);
+    await page.click('.tb-accel');
+    await page.keyboard.press('Control+Alt+KeyK');
+    await sleep(500);
+    check('conflit turbo / macro signalé', (await page.locator('.turbo-row .warn-text').count()) === 1);
+
+    check('aucune erreur JavaScript', errors.length === 0, errors.join(' | '));
+  } finally {
+    await app.close();
+  }
+
+  // ---- Redémarrage : persistance, journal, « quoi de neuf » ----
+  const metaFile = path.join(data, 'satella-data', 'app-meta.json');
+  fs.writeFileSync(metaFile, JSON.stringify({ lastVersion: '1.0.0' }));
+  const app2 = await launch(data);
+  try {
+    const page2 = await firstPage(app2);
+    const p2 = await page2.evaluate(() => window.satella.profiles.list());
+    check('profil actif conservé au redémarrage', !!p2.active);
+    await sleep(500);
+    const modal = await page2.textContent('#modal');
+    check('« quoi de neuf » après une mise à jour', /quoi de neuf/i.test(modal) && modal.includes('Nouveautés'), modal.slice(0, 80));
+    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+    const version = require(path.join(APP, 'package.json')).version;
+    check('version notée', meta.lastVersion === version);
+    check('journal écrit', fs.readFileSync(path.join(data, 'logs', 'satella.log'), 'utf8').includes('Satella'));
+  } finally {
+    await app2.close();
+  }
+
+  fs.rmSync(data, { recursive: true, force: true });
+  assert.deepEqual(failures, []);
+});

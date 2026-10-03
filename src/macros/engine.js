@@ -31,10 +31,12 @@ const MAX_DEPTH = 16;
 
 class MacroEngine extends EventEmitter {
   // `injector` : module d'injection d'entrées (remplaçable pour les tests)
-  constructor({ globalShortcut, injector = input }) {
+  // `opener` : ouvre un programme, un fichier ou un lien (étape « Ouvrir »)
+  constructor({ globalShortcut, injector = input, opener = null }) {
     super();
     this.globalShortcut = globalShortcut;
     this.input = injector;
+    this.opener = opener;
     this.macros = [];
     this.playing = new Map(); // id -> {cancelled}
     this.recording = false;
@@ -79,7 +81,10 @@ class MacroEngine extends EventEmitter {
   async play(id, draft = null) {
     const macro = draft || this.macros.find((m) => m.id === id);
     if (!macro) throw new Error('Macro introuvable');
-    if (!this.input.available) throw new Error("Injection d'entrées indisponible : " + (this.input.loadError && this.input.loadError.message));
+    // Une macro qui ne fait qu'ouvrir et attendre n'a pas besoin d'injection
+    if (!this.input.available && this.needsInput(macro.steps)) {
+      throw new Error("Injection d'entrées indisponible : " + (this.input.loadError && this.input.loadError.message));
+    }
     if (this.playing.has(macro.id)) return;
 
     const ctx = { cancelled: false, keys: new Set(), buttons: new Set() };
@@ -110,6 +115,22 @@ class MacroEngine extends EventEmitter {
       this.playing.delete(macro.id);
       this.emit('play-state', { id: macro.id, playing: false });
     }
+  }
+
+  // Les étapes (et les macros appelées) envoient-elles des touches ou des
+  // actions souris ?
+  needsInput(steps, seen = new Set()) {
+    return (steps || []).some((s) => {
+      if (s.type === 'delay' || s.type === 'open') return false;
+      if (s.type === 'loop') return this.needsInput(s.steps, seen);
+      if (s.type === 'runMacro') {
+        if (seen.has(s.macroId)) return false;
+        seen.add(s.macroId);
+        const sub = this.macros.find((m) => m.id === s.macroId);
+        return !!sub && this.needsInput(sub.steps, seen);
+      }
+      return true;
+    });
   }
 
   // Durée ajustée à la vitesse de lecture, avec variation aléatoire
@@ -197,6 +218,10 @@ class MacroEngine extends EventEmitter {
         case 'mouseClick': await this.click(ctx, step.button || 'left', step.count || 1, opts.holdMs); break;
         case 'mouseMove': this.input.mouseMove(step.x || 0, step.y || 0, !!step.relative); break;
         case 'mouseWheel': this.input.mouseWheel(step.delta || 120, !!step.horizontal); break;
+        case 'open':
+          if (!this.opener) throw new Error('ouverture de programmes indisponible');
+          await this.opener(step.target || '');
+          break;
         case 'loop': {
           const count = Math.max(1, step.count || 1);
           for (let i = 0; i < count && !ctx.cancelled; i++) {

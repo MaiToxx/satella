@@ -80,3 +80,28 @@ test('aucune image calculée quand personne ne regarde', () => {
   e.tick();
   assert.equal(frames, 1);
 });
+
+test('ambiance écran : chaque touche prend la couleur de sa zone d’écran', () => {
+  const { SCREEN_COLS, SCREEN_ROWS } = require('../src/led/engine');
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'screen', speed: 100 });
+  const grid = new Array(SCREEN_COLS * SCREEN_ROWS * 3).fill(0);
+  grid.splice(0, 3, 255, 0, 0);                                  // coin haut gauche : rouge
+  grid.splice(grid.length - 3, 3, 0, 0, 255);                    // coin bas droit : bleu
+  e.setScreenGrid(grid);
+  e._lastCompute = Date.now() - 100; // transition terminée d'un coup
+  const kb = e.computeKeyboard();
+  assert.deepEqual(kb.esc, [255, 0, 0]);
+  assert.deepEqual(kb.npenter, [0, 0, 255]);
+  assert.deepEqual(kb.g, [0, 0, 0]);
+});
+
+test('ambiance écran : transition douce et valeurs bornées', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'screen', speed: 0 });
+  e.setScreenGrid(new Array(360).fill(999));
+  e._lastCompute = Date.now() - 33;
+  const kb = e.computeKeyboard();
+  assert.ok(kb.esc[0] > 0 && kb.esc[0] < 255, String(kb.esc[0]));
+  e.setScreenGrid(null); // ignoré sans erreur
+});

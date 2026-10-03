@@ -31,13 +31,17 @@ const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
 const sanitize = require('./src/shared/sanitize');
 
+// Dossier de données séparé (tests, version de développement lancée à
+// côté de la version installée) : SATELLA_USER_DATA=<dossier>
+if (process.env.SATELLA_USER_DATA) app.setPath('userData', path.resolve(process.env.SATELLA_USER_DATA));
+
 // Une seule instance : un deuxième lancement (raccourci, démarrage de
 // Windows) réaffiche simplement la fenêtre existante au lieu de piloter
 // le même clavier en parallèle.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   console.log('Satella tourne déjà (zone de notification) : sa fenêtre est réaffichée. '
-    + 'Pour lancer une version de développement, quitte d\'abord l\'autre instance.');
+    + 'Pour lancer une version de développement à côté, utilise un autre dossier de données : SATELLA_USER_DATA=<dossier>.');
   app.quit();
 }
 
@@ -59,9 +63,12 @@ let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
 let uiPage = 'home';
-let audioCapturing = false;
+let captureKind = null; // effet capturé en cours : 'audio' | 'screen' | null
 let shortcutErrors = [];
 let boundsTimer = null;
+let updateReadyVersion = null;   // mise à jour téléchargée, prête à installer
+let updateDownloading = false;
+let whatsNew = null;             // nouveautés à montrer après une mise à jour
 
 // Raisons d'extinction des LED (inactivité, session verrouillée, choix
 // manuel depuis la zone de notification) : allumées quand il n'y en a aucune.
@@ -89,6 +96,7 @@ const DEFAULT_SETTINGS = {
   idleOff: false,
   idleMinutes: 10,
   autoCheckUpdates: true,
+  autoInstallUpdates: false,
   offOnLock: false,
   flashOnMacro: false,
 };
@@ -165,7 +173,7 @@ function createWindow() {
 
   win.webContents.on('did-finish-load', () => {
     if (ledEngine) ledEngine.renderOnce();
-    if (audioCapturing) startAudioCaptureInRenderer();
+    if (captureKind) startCaptureInRenderer();
   });
 
   // Signature (event, level, message, line, sourceId) jusqu'à Electron 34,
@@ -247,7 +255,7 @@ function setupEngines() {
   store = new Store(path.join(app.getPath('userData'), 'satella-data'), { log: (m) => console.log('[données]', m) });
   ledEngine = new LedEngine();
   direct = new DirectBackend();
-  macroEngine = new MacroEngine({ globalShortcut });
+  macroEngine = new MacroEngine({ globalShortcut, opener: openTargetSafely });
   snippetEngine = new SnippetEngine();
   turbos = store.read('turbos', []);
 
@@ -258,6 +266,7 @@ function setupEngines() {
   macros = store.read('macros', []);
 
   settings = { ...DEFAULT_SETTINGS, ...store.read('settings', {}) };
+  checkWhatsNew();
 
   // Profil actif. Première exécution de cette version : on reconnaît le
   // profil identique aux réglages courants ; sinon les réglages courants
@@ -291,7 +300,7 @@ function setupEngines() {
     }
     updateHookNeed();
     updateSysmon();
-    updateAudioCapture();
+    updateCapture();
     profileChanged();
   });
 
@@ -416,7 +425,7 @@ function applySettings() {
 
   updateHookNeed();
   updateSysmon();
-  updateAudioCapture();
+  updateCapture();
   rebuildTrayMenu();
   send('settings:changed', settings);
 }
@@ -573,7 +582,7 @@ function setDim(reason, on) {
   if (!was && now) applyDimmed();
   else if (was && !now) reapplyLeds();
   if (was !== now) {
-    updateAudioCapture();
+    updateCapture();
     rebuildTrayMenu();
     send('leds:dimmed', { dimmed: now, reasons: [...dimReasons] });
   }
@@ -614,21 +623,25 @@ function updateSysmon() {
   }
 }
 
-// Visualiseur audio : la capture du son de Windows (boucle de sortie) se
-// fait dans l'interface (Web Audio), qui renvoie un spectre 30 fois/s.
-function startAudioCaptureInRenderer() {
-  if (!win || win.isDestroyed()) return;
+// Effets capturés dans l'interface : le visualiseur audio (son de Windows,
+// spectre 30 fois/s) et l'ambiance écran (couleurs de l'écran 10 fois/s).
+const CAPTURE_EFFECTS = { audio: '__satellaAudio', screen: '__satellaScreen' };
+
+function startCaptureInRenderer() {
+  if (!win || win.isDestroyed() || !captureKind) return;
+  const obj = CAPTURE_EFFECTS[captureKind];
   // userGesture = true : getDisplayMedia exige une action utilisateur
-  win.webContents.executeJavaScript('window.__satellaAudio && window.__satellaAudio.start()', true)
-    .catch((err) => console.log('[audio] démarrage impossible :', err.message));
+  win.webContents.executeJavaScript(`window.${obj} && window.${obj}.start()`, true)
+    .catch((err) => console.log(`[capture ${captureKind}] démarrage impossible :`, err.message));
 }
 
-function updateAudioCapture() {
-  const need = settings.ledsEnabled && !isDimmed() && ledEngine.state.keyboard.effect === 'audio';
-  if (need === audioCapturing) return;
-  audioCapturing = need;
-  if (need) startAudioCaptureInRenderer();
-  else send('audio:stop');
+function updateCapture() {
+  const eff = ledEngine.state.keyboard.effect;
+  const want = settings.ledsEnabled && !isDimmed() && CAPTURE_EFFECTS[eff] ? eff : null;
+  if (want === captureKind) return;
+  if (captureKind) send('capture:stop', captureKind);
+  captureKind = want;
+  startCaptureInRenderer();
 }
 
 // --------------------------------------------------------------- Profils --
@@ -786,27 +799,82 @@ function updateHookNeed() {
   else macroEngine.stopActivityFeed();
 }
 
+// Notes de version d'une mise à jour (texte de latest.yml, éventuellement
+// une liste par version, ou du HTML venant de GitHub) -> texte simple
+function notesText(releaseNotes) {
+  const raw = Array.isArray(releaseNotes)
+    ? releaseNotes.map((n) => (n && n.note) || '').join('\n\n')
+    : String(releaseNotes || '');
+  return raw.replace(/<[^>]+>/g, '').slice(0, 20000);
+}
+
 function setupUpdater() {
   autoUpdater.on('download-progress', (p) => {
     send('update:progress', { percent: Math.round(p.percent) });
   });
   autoUpdater.on('update-downloaded', (info) => {
-    send('update:ready', { version: info.version });
+    updateDownloading = false;
+    updateReadyVersion = info.version;
+    rebuildTrayMenu();
+    send('update:ready', { version: info.version, auto: !!settings.autoInstallUpdates });
   });
   autoUpdater.on('error', (err) => {
+    updateDownloading = false;
     console.log('[mise à jour]', err.message);
     send('update:error', { message: err.message });
   });
 }
 
-// Capture audio (visualiseur) : boucle de la sortie son de Windows, sans
-// fenêtre de choix pour l'utilisateur.
+// Vérification discrète (au démarrage puis toutes les 6 heures : Satella
+// reste souvent ouverte des jours). Avec l'installation automatique, la
+// mise à jour est téléchargée en arrière-plan et installée à la fermeture.
+async function backgroundUpdateCheck() {
+  if (!app.isPackaged || !settings.autoCheckUpdates || updateReadyVersion || updateDownloading) return;
+  try {
+    const r = await autoUpdater.checkForUpdates();
+    if (!r || !r.updateInfo || autoUpdater.currentVersion.compare(r.updateInfo.version) >= 0) return;
+    const info = { latest: r.updateInfo.version, notes: notesText(r.updateInfo.releaseNotes) };
+    if (settings.autoInstallUpdates) {
+      updateDownloading = true;
+      console.log('[mise à jour] téléchargement automatique de la version', info.latest);
+      autoUpdater.downloadUpdate().catch((err) => {
+        updateDownloading = false;
+        console.log('[mise à jour] téléchargement impossible :', err.message);
+      });
+    } else {
+      send('update:available', info);
+    }
+  } catch { /* hors ligne ou GitHub injoignable : silencieux */ }
+}
+
+// Première ouverture après une mise à jour : les nouveautés de la version
+// (fichier embarqué) sont proposées une fois
+function checkWhatsNew() {
+  const meta = store.read('app-meta', {});
+  const current = app.getVersion();
+  // Pas de trace de version mais des données existantes (session.json est
+  // écrit dès le premier lancement de la 1.5.0) : mise à jour depuis une
+  // version qui ne notait pas encore son numéro. Appelé avant toute
+  // écriture de session, une installation neuve n'a encore rien.
+  const hadData = ['session', 'settings', 'led-state', 'macros'].some((n) => store.read(n, null) !== null);
+  const previous = meta.lastVersion || (hadData ? 'précédente' : null);
+  if (previous && previous !== current) {
+    let notes = '';
+    try { notes = fs.readFileSync(path.join(__dirname, 'build', 'release-notes.md'), 'utf8'); } catch { /* absent */ }
+    if (notes.trim()) whatsNew = { version: current, previous, notes };
+  }
+  if (meta.lastVersion !== current) store.write('app-meta', { ...meta, lastVersion: current });
+}
+
+// Captures (visualiseur audio, ambiance écran) : écran principal et, si
+// demandé, boucle de la sortie son de Windows ; sans fenêtre de choix.
 function setupDisplayMedia() {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback({});
-      const grant = { video: sources[0] };
-      if (process.platform === 'win32') grant.audio = 'loopback';
+      const primary = String(screen.getPrimaryDisplay().id);
+      const grant = { video: sources.find((s) => s.display_id === primary) || sources[0] };
+      if (process.platform === 'win32' && request.audioRequested) grant.audio = 'loopback';
       callback(grant);
     }).catch(() => callback({}));
   });
@@ -857,6 +925,19 @@ async function exportData(kind, name) {
   }
 }
 
+// Étape de macro « Ouvrir » : lien (navigateur, messagerie) ou programme /
+// fichier (application associée). La cible est revalidée à chaque fois.
+async function openTargetSafely(target) {
+  const t = sanitize.openTarget(target);
+  if (!t) throw new Error(`cible à ouvrir invalide : « ${String(target || '').slice(0, 80)} »`);
+  if (/^(https?:|mailto:)/i.test(t)) {
+    await shell.openExternal(t);
+    return;
+  }
+  const err = await shell.openPath(t);
+  if (err) throw new Error(`ouverture de « ${t} » impossible : ${err}`);
+}
+
 function uniqueProfileName(profiles, name) {
   if (!profiles.some((p) => p.name === name)) return name;
   for (let i = 2; ; i++) {
@@ -879,6 +960,29 @@ async function importData() {
     parsed = sanitize.parseImport(fs.readFileSync(res.filePaths[0], 'utf8'), KEY_NAMES);
   } catch (err) {
     return { ok: false, error: err.message };
+  }
+
+  // Étapes « Ouvrir » (programmes, liens) : jamais importées sans accord
+  const imported = parsed.kind === 'profile'
+    ? [parsed.profile]
+    : [{ macros: parsed.data.macros }, ...parsed.data.profiles];
+  const targets = [...new Set(imported.flatMap((x) => sanitize.openTargets(x.macros)))];
+  if (targets.length) {
+    const ans = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Importer sans ces étapes', 'Tout importer', 'Annuler'],
+      defaultId: 0,
+      cancelId: 2,
+      title: 'Programmes et liens dans le fichier',
+      message: 'Ce fichier contient des macros qui ouvrent des programmes, des fichiers ou des liens.',
+      detail: 'N\'importe ces étapes que si tu fais confiance à la personne qui t\'a envoyé le fichier :\n\n'
+        + targets.slice(0, 12).join('\n') + (targets.length > 12 ? `\n… et ${targets.length - 12} autre(s)` : ''),
+    });
+    if (ans.response === 2) return { ok: false, canceled: true };
+    if (ans.response === 0) {
+      for (const x of imported) x.macros = sanitize.stripOpenSteps(x.macros);
+      if (parsed.kind === 'backup') parsed.data.macros = imported[0].macros;
+    }
   }
 
   if (parsed.kind === 'profile') {
@@ -990,7 +1094,8 @@ function setupIpc() {
       const latest = result && result.updateInfo ? result.updateInfo.version : current;
       const newer = !!(result && result.updateInfo)
         && autoUpdater.currentVersion.compare(result.updateInfo.version) < 0;
-      return { ok: true, current, latest, newer };
+      const notes = newer ? notesText(result.updateInfo.releaseNotes) : '';
+      return { ok: true, current, latest, newer, notes };
     } catch (err) {
       return { ok: false, current, error: err.message };
     }
@@ -998,6 +1103,7 @@ function setupIpc() {
 
   ipcMain.handle('app:downloadUpdate', async () => {
     try {
+      updateDownloading = true;
       await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
@@ -1032,6 +1138,7 @@ function setupIpc() {
       inputError: input.loadError ? input.loadError.message : null,
       uiohook: hookAvailable(),
     },
+    whatsNew,
     keyNames: KEY_NAMES,
     keyLabels: Object.fromEntries(KEY_NAMES.map((k) => [k, keys.labelFor(k)])),
   }));
@@ -1058,7 +1165,8 @@ function setupIpc() {
   ipcMain.handle('led:removeOverlay', (e, device, ids) => ledEngine.removeOverlay(device, ids));
   ipcMain.handle('leds:setManualOff', (e, on) => { setDim('manual', !!on); return isDimmed(); });
   ipcMain.on('audio:bands', (e, bands) => ledEngine.setAudioBands(bands));
-  ipcMain.on('audio:error', (e, message) => console.log('[audio]', message));
+  ipcMain.on('screen:grid', (e, grid) => ledEngine.setScreenGrid(grid));
+  ipcMain.on('capture:error', (e, kind, message) => console.log(`[capture ${kind}]`, message));
 
   // ---- Périphériques ----
   ipcMain.handle('devices:refreshHid', () => {
@@ -1258,6 +1366,19 @@ function setupIpc() {
   // ---- Import / export ----
   ipcMain.handle('data:export', (e, kind, name) => exportData(kind === 'profile' ? 'profile' : 'backup', name));
   ipcMain.handle('data:import', () => importData());
+
+  // Choix d'un programme ou d'un fichier (étape « Ouvrir »)
+  ipcMain.handle('dialog:pickFile', async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Programme ou fichier à ouvrir',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Programmes et raccourcis', extensions: ['exe', 'lnk', 'bat', 'cmd', 'url'] },
+        { name: 'Tous les fichiers', extensions: ['*'] },
+      ],
+    });
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+  });
 }
 
 // ------------------------------------------------ Zone de notification --
@@ -1302,6 +1423,10 @@ function rebuildTrayMenu() {
       },
     },
     { type: 'separator' },
+    ...(updateReadyVersion ? [{
+      label: `Installer la version ${updateReadyVersion} et redémarrer`,
+      click: () => { quitting = true; autoUpdater.quitAndInstall(); },
+    }] : []),
     { label: 'Quitter', click: () => { quitting = true; app.quit(); } },
   ];
   tray.setContextMenu(Menu.buildFromTemplate(template));
@@ -1341,17 +1466,9 @@ app.whenReady().then(() => {
     return;
   }
 
-  // Vérification discrète des mises à jour au démarrage
-  if (app.isPackaged && settings.autoCheckUpdates) {
-    setTimeout(async () => {
-      try {
-        const r = await autoUpdater.checkForUpdates();
-        if (r && r.updateInfo && autoUpdater.currentVersion.compare(r.updateInfo.version) < 0) {
-          send('update:available', { latest: r.updateInfo.version });
-        }
-      } catch { /* hors ligne ou GitHub injoignable : silencieux */ }
-    }, 15000);
-  }
+  // Vérification discrète des mises à jour : au démarrage, puis toutes les 6 h
+  setTimeout(backgroundUpdateCheck, 15000);
+  setInterval(backgroundUpdateCheck, 6 * 3600 * 1000);
 });
 
 app.on('before-quit', () => { quitting = true; });
