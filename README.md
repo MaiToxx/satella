@@ -15,7 +15,9 @@ Quitte d'abord la version installée (zone de notification > Quitter) : une
 seule instance de Satella peut tourner à la fois.
 Tests : `npm test` (aucun matériel ni module natif nécessaire).
 
-Publier une version, au choix :
+Publier une version (après avoir mis à jour les notes de version dans
+[build/release-notes.md](build/release-notes.md), reprises dans la release
+GitHub), au choix :
 - bump de `version` dans package.json, puis pousser l'étiquette
   correspondante (`git tag v1.5.0 && git push origin v1.5.0`) : GitHub Actions
   construit et publie l'installeur ([.github/workflows/release.yml](.github/workflows/release.yml)) ;
