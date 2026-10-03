@@ -44,7 +44,7 @@
   "author": "xavier45letop@gmail.com",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^33.0.0",
+    "electron": "^44.5.1",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
