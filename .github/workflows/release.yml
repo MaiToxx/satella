@@ -1,18 +1,28 @@
-# Publication : pousser une étiquette vX.Y.Z (même numéro que package.json)
-# construit l'installeur Windows et le publie dans les releases GitHub,
-# où la mise à jour automatique de Satella va le chercher.
-#   git tag v1.5.0 && git push origin v1.5.0
+# Publication de l'installeur Windows dans les releases GitHub, où la mise
+# à jour automatique de Satella va le chercher. Deux façons de lancer :
+#   - pousser une étiquette vX.Y.Z (même numéro que package.json) :
+#       git tag v1.5.0 && git push origin v1.5.0
+#   - onglet Actions > Release > Run workflow (sur main) : la version de
+#     package.json est publiée et l'étiquette vX.Y.Z créée avec la release.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+# Jamais deux publications en même temps
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   windows:
+    # Lancement manuel : uniquement depuis main
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +30,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Version de l'étiquette = version du paquet
+      - name: Vérifier la version
         shell: bash
         run: |
           v=$(node -p "require('./package.json').version")
-          if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
-            echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à package.json ($v)"; exit 1
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
+              echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à package.json ($v)"; exit 1
+            fi
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
+            echo "La version $v est déjà publiée : augmente la version dans package.json"; exit 1
           fi
+          echo "Publication de la version $v"
       - run: npm ci
       - run: node --test "test/*.test.js"
       - name: Construire et publier

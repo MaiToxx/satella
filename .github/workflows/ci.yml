@@ -25,3 +25,28 @@ jobs:
           done
       - name: Tests unitaires
         run: node --test "test/*.test.js"
+
+  # Sur une pull request : tests sous Windows avec les vrais modules natifs,
+  # puis construction de l'installeur (sans publication), téléchargeable
+  # pendant 7 jours depuis la page du run pour l'essayer avant de publier.
+  windows:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Tests unitaires (Windows)
+        run: node --test "test/*.test.js"
+      - name: Chargement des modules natifs
+        run: node -e "require('node-hid'); require('koffi'); require('./src/macros/input').available || process.exit(1); console.log('modules natifs ok')"
+      - name: Construire l'installeur (sans publier)
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Satella-Setup
+          path: dist/*.exe
+          retention-days: 7
