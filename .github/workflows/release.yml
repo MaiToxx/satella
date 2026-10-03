@@ -1,9 +1,14 @@
 # Publication de l'installeur Windows dans les releases GitHub, où la mise
 # à jour automatique de Satella va le chercher. Deux façons de lancer :
-#   - pousser une étiquette vX.Y.Z (même numéro que package.json) :
-#       git tag v1.5.0 && git push origin v1.5.0
 #   - onglet Actions > Release > Run workflow (sur main) : la version de
-#     package.json est publiée et l'étiquette vX.Y.Z créée avec la release.
+#     package.json est publiée, l'étiquette vX.Y.Z est créée au passage ;
+#   - pousser une étiquette vX.Y.Z (même numéro que package.json).
+#
+# Déroulé : étiquette puis release en brouillon créées AVANT electron-builder
+# (sinon ses deux publications parallèles se disputent la création et
+# l'une échoue), envoi des fichiers, puis publication seulement si
+# latest.yml est bien là. Relancer le workflow complète une release
+# incomplète ; une release complète n'est jamais republiée.
 name: Release
 
 on:
@@ -24,6 +29,8 @@ jobs:
     # Lancement manuel : uniquement depuis main
     if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,20 +38,43 @@ jobs:
           node-version: 22
           cache: npm
       - name: Vérifier la version
+        id: version
         shell: bash
         run: |
           v=$(node -p "require('./package.json').version")
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
-              echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à package.json ($v)"; exit 1
-            fi
-          elif git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "v$v" != "${GITHUB_REF_NAME}" ]; then
+            echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à package.json ($v)"; exit 1
+          fi
+          if gh release view "v$v" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx 'latest.yml'; then
             echo "La version $v est déjà publiée : augmente la version dans package.json"; exit 1
           fi
           echo "Publication de la version $v"
       - run: npm ci
       - run: node --test "test/*.test.js"
-      - name: Construire et publier
+      - name: Préparer l'étiquette et la release
+        shell: bash
+        run: |
+          v="${{ steps.version.outputs.v }}"
+          if ! git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
+            git tag "v$v"
+            git push origin "v$v"
+          fi
+          if ! gh release view "v$v" > /dev/null 2>&1; then
+            gh release create "v$v" --draft --verify-tag --title "$v" --notes-file build/release-notes.md
+          fi
+      - name: Construire et envoyer les fichiers
         run: npx electron-builder --win --publish always
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Autorise l'envoi vers une release déjà publiée (relance)
+          EP_GH_IGNORE_TIME: 'true'
+      - name: Publier la release
+        shell: bash
+        run: |
+          v="${{ steps.version.outputs.v }}"
+          assets=$(gh release view "v$v" --json assets --jq '.assets[].name')
+          echo "$assets"
+          for f in latest.yml "Satella-Setup-$v.exe" "Satella-Setup-$v.exe.blockmap"; do
+            echo "$assets" | grep -qx "$f" || { echo "Fichier manquant dans la release : $f"; exit 1; }
+          done
+          gh release edit "v$v" --draft=false --latest
