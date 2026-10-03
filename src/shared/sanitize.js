@@ -223,7 +223,19 @@ const SETTING_TYPES = {
   idleMinutes: 'number', autoCheckUpdates: 'boolean', autoInstallUpdates: 'boolean', offOnLock: 'boolean',
   flashOnMacro: 'boolean', keyStats: 'boolean', nightMode: 'boolean', nightFrom: 'string',
   nightTo: 'string', nightAction: 'string', nightLevel: 'number',
+  lockIndicators: 'boolean', lockColor: 'string', timerMinutes: 'number', autoBackup: 'boolean',
+  appShortcuts: 'object',
 };
+
+// Raccourcis globaux de l'application (action -> accélérateur)
+const APP_SHORTCUT_ACTIONS = ['leds', 'nextProfile', 'brightUp', 'brightDown', 'stopAll', 'timer'];
+function appShortcuts(v) {
+  const out = {};
+  if (!isObj(v)) return out;
+  for (const a of APP_SHORTCUT_ACTIONS) out[a] = accelerator(v[a]);
+  return out;
+}
+
 function settingsPatch(v) {
   const out = {};
   if (!isObj(v)) return out;
@@ -232,6 +244,13 @@ function settingsPatch(v) {
     if (k === 'autoOptimizeThreshold') out[k] = int(v[k], 50, 95, 80);
     else if (k === 'idleMinutes') out[k] = int(v[k], 1, 60, 10);
     else if (k === 'nightLevel') out[k] = int(v[k], 5, 100, 30);
+    else if (k === 'timerMinutes') out[k] = int(v[k], 1, 180, 25);
+    else if (k === 'lockColor') {
+      const c = hex(v[k]);
+      if (c) out[k] = c;
+    } else if (k === 'appShortcuts') {
+      if (isObj(v[k])) out[k] = appShortcuts(v[k]);
+    }
     else if (k === 'nightFrom' || k === 'nightTo') {
       if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v[k])) out[k] = v[k];
     } else if (k === 'nightAction') {
@@ -316,5 +335,5 @@ function stripOpenSteps(list) {
 
 module.exports = {
   parseImport, makeExport, ledState, macro, macros, profile, snippet, turbo, keymap, settingsPatch,
-  openTarget, openTargets, stripOpenSteps, KB_EFFECTS, MOUSE_EFFECTS,
+  openTarget, openTargets, stripOpenSteps, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
 };

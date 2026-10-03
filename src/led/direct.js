@@ -67,10 +67,15 @@ const ANIMATED_NATIVE = new Set(['breathing', 'wave', 'rainbow', 'reactive', 'sp
 
 const hasOverlay = (state) => !!(state && state.overlay && Object.keys(state.overlay).length);
 
-// L'état du clavier passe-t-il par le flux temps réel ?
+// Configuration enregistrée dans le clavier pour un état donné
+const kbConfigSig = (state) => JSON.stringify([state.effect, state.baseColor, state.speed,
+  state.brightness, state.direction, state.colors, state.overlay || {}]);
+
+// L'état du clavier passe-t-il par le flux temps réel ? (`live` : calques
+// temporaires affichés par-dessus, comme les témoins Verr. Maj ou le minuteur)
 function isStreamed(state) {
   if (!state) return false;
-  return SOFT_EFFECTS.has(state.effect) || (ANIMATED_NATIVE.has(state.effect) && hasOverlay(state));
+  return !!state.live || SOFT_EFFECTS.has(state.effect) || (ANIMATED_NATIVE.has(state.effect) && hasOverlay(state));
 }
 
 // Carte V2 : id de touche Satella -> emplacement dans le tampon de couleurs.
@@ -130,6 +135,7 @@ class DirectBackend extends EventEmitter {
     this._kbTimer = null;
     this._mouseTimer = null;
     this._lastKbSig = '';
+    this._lastConfigSig = '';  // dernière configuration écrite dans la flash
     this._lastMouseSig = '';
   }
 
@@ -166,6 +172,7 @@ class DirectBackend extends EventEmitter {
           this.kbProbe(); // signature V2 + taille du tampon
           this._kbRetryAt = 0;
           this._lastKbSig = '';
+          this._lastConfigSig = '';
           this.emit('connected', 'keyboard');
         } catch (err) {
           this.dropKeyboard();
@@ -209,6 +216,7 @@ class DirectBackend extends EventEmitter {
     this.kb = null;
     this.kbStreaming = false;
     this._lastKbSig = '';
+    this._lastConfigSig = '';
     this.emit('status', this.status());
   }
 
@@ -222,6 +230,7 @@ class DirectBackend extends EventEmitter {
   // Force la réécriture complète au prochain apply*()
   forceReapply() {
     this._lastKbSig = '';
+    this._lastConfigSig = '';
     this._lastMouseSig = '';
   }
 
@@ -379,8 +388,7 @@ class DirectBackend extends EventEmitter {
     clearTimeout(this._kbTimer);
     this._kbTimer = setTimeout(() => {
       if (!this.kb) return;
-      const sig = JSON.stringify([state.effect, state.baseColor, state.speed,
-        state.brightness, state.direction, state.colors, state.overlay || {}]);
+      const sig = kbConfigSig(state) + (isStreamed(state) ? '|flux' : '');
       if (sig === this._lastKbSig) return;
       // Signature retenue tout de suite (pas de double envoi pendant
       // l'écriture), oubliée si l'écriture échoue
@@ -414,6 +422,11 @@ class DirectBackend extends EventEmitter {
       await this.pauseWorker();
       try { this.kbQuery(KB_CMD_DYNAMIC_END); } catch { /* déjà sorti */ }
     }
+    // La configuration enregistrée est déjà la bonne (retour après un effet
+    // logiciel ou un calque temporaire) : la sortie du mode dynamique suffit,
+    // sans nouvelle écriture en flash
+    const cfg = kbConfigSig(state);
+    if (cfg === this._lastConfigSig) return;
 
     switch (state.effect) {
       case 'off':
@@ -460,6 +473,7 @@ class DirectBackend extends EventEmitter {
       default:
         this.kbSetMode(KB_MODES.static, bright, 3, 0, 0, r, g, b);
     }
+    this._lastConfigSig = cfg;
   }
 
   applyMouse(state) {
@@ -692,6 +706,7 @@ class DirectBackend extends EventEmitter {
   testKeyboard(r, g, b) {
     if (!this.kb) throw new Error('clavier non connecté');
     this._lastKbSig = '';
+    this._lastConfigSig = '';
     this.kbSetMode(KB_MODES.static, 4, 3, 0, 0, r, g, b);
   }
 

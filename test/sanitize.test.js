@@ -114,3 +114,15 @@ test('import : étape « Attendre une touche » et réglages du mode nuit valid�
     keyStats: true, nightMode: true, nightFrom: '22:30', nightTo: '24:00', nightAction: 'boom', nightLevel: 1,
   }), { keyStats: true, nightMode: true, nightFrom: '22:30', nightLevel: 5 });
 });
+
+test('import : témoins, minuteur, sauvegardes et raccourcis de l’application validés', () => {
+  const { settingsPatch } = require('../src/shared/sanitize');
+  assert.deepEqual(settingsPatch({
+    lockIndicators: true, lockColor: '#FFAA00', timerMinutes: 999, autoBackup: false,
+    appShortcuts: { leds: 'Ctrl+Alt+L', timer: 'Ctrl+Alt+<script>', inconnue: 'F9' },
+  }), {
+    lockIndicators: true, lockColor: '#ffaa00', timerMinutes: 180, autoBackup: false,
+    appShortcuts: { leds: 'Ctrl+Alt+L', nextProfile: '', brightUp: '', brightDown: '', stopAll: '', timer: '' },
+  });
+  assert.deepEqual(settingsPatch({ lockColor: 'rouge', appShortcuts: null }), {});
+});

@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('satella', {
     setManualOff: (on) => ipcRenderer.invoke('leds:setManualOff', on),
     onFrame: on('led:frame'),
     onDimmed: on('leds:dimmed'),
+    onState: on('led:state'),
   },
 
   // Effets capturés dans l'interface (son, écran) : les données calculées
@@ -87,6 +88,22 @@ contextBridge.exposeInMainWorld('satella', {
   stats: {
     get: () => ipcRenderer.invoke('stats:get'),
     reset: () => ipcRenderer.invoke('stats:reset'),
+  },
+
+  // Minuteur visuel (rangée F1-F12)
+  timer: {
+    get: () => ipcRenderer.invoke('timer:get'),
+    start: (minutes) => ipcRenderer.invoke('timer:start', minutes),
+    stop: () => ipcRenderer.invoke('timer:stop'),
+    onState: on('timer:state'),
+  },
+
+  // Sauvegardes automatiques (dossier satella-data/sauvegardes)
+  backups: {
+    list: () => ipcRenderer.invoke('backups:list'),
+    now: () => ipcRenderer.invoke('backups:now'),
+    openFolder: () => ipcRenderer.invoke('backups:openFolder'),
+    restore: (name) => ipcRenderer.invoke('backups:restore', name),
   },
 
   memory: {

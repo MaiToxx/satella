@@ -555,3 +555,20 @@ details > summary:hover { color: var(--text); }
 .release-notes h4:first-child { margin-top: 4px; }
 .release-notes ul { padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
 .release-notes p { margin: 6px 0; }
+
+/* Minuteur (Accueil) */
+.timer-panel { margin-top: 22px; }
+.timer-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.timer-head > div:first-child { flex: 1; }
+.timer-left { font-family: var(--font-mono); font-size: 26px; font-weight: 600; color: var(--faint); min-width: 92px; text-align: right; }
+.timer-left.running { color: var(--accent); }
+.timer-left.done { color: var(--warn); animation: pulse 1s infinite; }
+
+/* Sauvegardes automatiques et raccourcis de l'application (Paramètres) */
+.backup-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.backup-item { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.backup-item .b-date { font-family: var(--font-mono); min-width: 150px; }
+.app-sc-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.app-sc-row:last-child { border-bottom: none; }
+.app-sc-row .sc-name { flex: 1; min-width: 200px; }
+.app-sc-row .trigger-input { min-width: 170px; }

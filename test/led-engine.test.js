@@ -129,3 +129,52 @@ test('atténuation globale (mode nuit) appliquée à l’aperçu et au flux', ()
   e.setDimFactor(1);
   assert.deepEqual(e.computeKeyboard().esc, [255, 255, 255]);
 });
+
+test('minuteur : F1-F12 se vident avec le temps, puis tout le clavier clignote', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'static', baseColor: '#0000ff', brightness: 100 });
+  assert.equal(e.hasLiveLayers(), false);
+  e.setTimer({ ms: 60000, t0: Date.now() - 30000 }); // moitié du temps écoulée
+  assert.equal(e.hasLiveLayers(), true);
+  let kb = e.computeKeyboard();
+  const lum = (rgb) => rgb[0] + rgb[1] + rgb[2];
+  assert.ok(lum(kb.f1) > 300, 'F1 encore allumée');
+  assert.ok(lum(kb.f12) < 60, 'F12 déjà éteinte');
+  assert.deepEqual(kb.q, [0, 0, 255], 'le reste du clavier garde son effet');
+  // Temps écoulé : clignotement orange de tout le clavier
+  e.setTimer({ ms: 1000, t0: Date.now() - 1010 });
+  kb = e.computeKeyboard();
+  assert.deepEqual(kb.q, [255, 90, 0]);
+  e.setTimer(null);
+  assert.equal(e.hasLiveLayers(), false);
+  assert.deepEqual(e.computeKeyboard().q, [0, 0, 255]);
+});
+
+test('minuteur : images calculées même sur un effet statique', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'static' });
+  let frames = 0;
+  e.on('frame', () => frames++);
+  e.tick();
+  assert.equal(frames, 0, 'statique : rien à recalculer');
+  e.setTimer({ ms: 60000 });
+  frames = 0;
+  e.tick();
+  assert.equal(frames, 1);
+});
+
+test('témoins : touche allumée par-dessus l’effet, sans toucher à l’état enregistré', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'static', baseColor: '#000000', brightness: 100 });
+  let states = 0;
+  e.on('state', () => states++);
+  e.setIndicators({ capslock: [255, 255, 255] });
+  assert.equal(states, 0);
+  assert.equal(e.hasLiveLayers(), true);
+  assert.deepEqual(e.computeKeyboard().capslock, [255, 255, 255]);
+  assert.deepEqual(e.computeKeyboard().a, [0, 0, 0]);
+  assert.deepEqual(e.state.keyboard.overlay, {});
+  e.setIndicators({});
+  assert.equal(e.hasLiveLayers(), false);
+  assert.deepEqual(e.computeKeyboard().capslock, [0, 0, 0]);
+});

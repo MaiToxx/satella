@@ -16,6 +16,7 @@ let CAPS = {};
 let SHORTCUT_ERRORS = [];
 let ACTIVE_PROFILE = null;
 let DIMMED = false;
+let LOCKS_AVAILABLE = true;   // témoins Verr. Maj / Verr. Num (Windows)
 
 const kbSelection = new Set();
 let mouseSelection = null;
@@ -198,6 +199,7 @@ function showPage(name) {
   } else if (name === 'settings') {
     refreshFootprint();
     refreshStatsInfo();
+    refreshBackups();
     syncStartupState();
   } else if (name === 'profiles' && pendingProfiles) {
     renderProfiles(pendingProfiles);
@@ -1017,6 +1019,9 @@ function accelConflict(accel, self) {
   if (m) return `la macro « ${m.name} »`;
   const ti = TURBOS.findIndex((t) => t !== self && t.enabled && t.accelerator && normAccel(t.accelerator) === k);
   if (ti >= 0) return `le turbo n°${ti + 1}`;
+  const app = APP_SHORTCUTS.find(([id]) => id !== self && (SETTINGS.appShortcuts || {})[id]
+    && normAccel(SETTINGS.appShortcuts[id]) === k);
+  if (app) return `la commande « ${app[1]} »`;
   return null;
 }
 
@@ -2069,7 +2074,11 @@ $('#data-export-all').addEventListener('click', async () => {
   else if (!res.canceled) toast('Sauvegarde impossible : ' + res.error, 4000);
 });
 $('#data-import').addEventListener('click', async () => {
-  const res = await window.satella.data.import();
+  onImported(await window.satella.data.import());
+});
+
+// Résultat d'un import (fichier choisi ou sauvegarde automatique)
+function onImported(res) {
   if (!res.ok) {
     if (!res.canceled) toast('Import impossible : ' + res.error, 5000);
     return;
@@ -2088,7 +2097,7 @@ $('#data-import').addEventListener('click', async () => {
     toast('Sauvegarde restaurée.');
   }
   renderProfiles(res);
-});
+}
 
 /* ================= Expansion de texte ================= */
 let SNIPPETS = [];
@@ -2298,6 +2307,9 @@ function renderSettings(s) {
   $('#set-idle-val').textContent = s.idleMinutes + ' min';
   $('#set-offlock').checked = !!s.offOnLock;
   $('#set-flash').checked = !!s.flashOnMacro;
+  $('#set-locks').checked = !!s.lockIndicators;
+  $('#set-lock-color').value = s.lockColor || '#ffffff';
+  $('#set-autobackup').checked = s.autoBackup !== false;
   $('#set-keystats').checked = !!s.keyStats;
   $('#set-night').checked = !!s.nightMode;
   $('#set-night-from').value = s.nightFrom || '23:00';
@@ -2321,6 +2333,8 @@ function renderSettings(s) {
   });
   const active = $('.nav-btn.active');
   if (active && active.style.display === 'none') showPage('home');
+  if (!TIMER.running && document.activeElement !== $('#timer-minutes')) $('#timer-minutes').value = s.timerMinutes || 25;
+  renderAppShortcuts();
 }
 
 // Interrupteurs simples : réglage booléen <-> case à cocher
@@ -2334,6 +2348,8 @@ const SETTING_SWITCHES = {
   '#set-autoinstall': 'autoInstallUpdates',
   '#set-keystats': 'keyStats',
   '#set-night': 'nightMode',
+  '#set-locks': 'lockIndicators',
+  '#set-autobackup': 'autoBackup',
 };
 for (const [sel, key] of Object.entries(SETTING_SWITCHES)) {
   $(sel).addEventListener('change', async (e) => {
@@ -2414,6 +2430,121 @@ $('#set-stats-reset').addEventListener('click', async () => {
   toast('Statistiques remises à zéro.');
 });
 
+// Témoins Verr. Maj / Verr. Num : couleur
+$('#set-lock-color').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ lockColor: e.target.value }));
+});
+
+/* ---- Raccourcis de l'application ---- */
+const APP_SHORTCUTS = [
+  ['leds', 'Éteindre / rallumer les LED'],
+  ['nextProfile', 'Profil suivant'],
+  ['brightUp', 'Luminosité +'],
+  ['brightDown', 'Luminosité −'],
+  ['stopAll', 'Arrêter toutes les macros et turbos'],
+  ['timer', 'Démarrer / arrêter le minuteur'],
+];
+
+function renderAppShortcuts() {
+  const box = $('#app-shortcuts');
+  const focused = document.activeElement;
+  if (!box || (focused && focused.classList.contains('capturing') && box.contains(focused))) return; // capture en cours
+  const sc = SETTINGS.appShortcuts || {};
+  box.innerHTML = APP_SHORTCUTS.map(([id, label]) => {
+    const err = shortcutError('app', id);
+    return `<div class="app-sc-row" data-id="${id}">
+      <span class="sc-name">${esc(label)}</span>
+      <input type="text" readonly class="trigger-input" value="${esc(sc[id] || '')}" placeholder="Aucun">
+      <button class="btn small sc-clear" ${sc[id] ? '' : 'disabled'}>Effacer</button>
+      ${err ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} Raccourci inactif : ${esc(err.reason)}.</span>` : ''}
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.app-sc-row').forEach((row) => {
+    const id = row.dataset.id;
+    captureAccelerator(row.querySelector('.trigger-input'), () => (SETTINGS.appShortcuts || {})[id],
+      (accel) => saveAppShortcut(id, accel), id);
+    row.querySelector('.sc-clear').addEventListener('click', () => saveAppShortcut(id, ''));
+  });
+}
+
+async function saveAppShortcut(id, accel) {
+  const next = { ...(SETTINGS.appShortcuts || {}), [id]: accel };
+  renderSettings(await window.satella.settings.set({ appShortcuts: next }));
+}
+
+/* ---- Sauvegardes automatiques ---- */
+function fmtBackupDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+async function refreshBackups() {
+  const list = await window.satella.backups.list();
+  const box = $('#backup-list');
+  if (!list.length) {
+    box.innerHTML = '<span class="muted" style="font-size:12.5px">Aucune sauvegarde pour l\'instant.</span>';
+    return;
+  }
+  box.innerHTML = list.map((b) => `<div class="backup-item" data-name="${esc(b.name)}">
+      <span class="b-date">${esc(fmtBackupDate(b.date))}</span>
+      <span class="muted">${Math.max(1, Math.round(b.size / 1024))} Ko</span>
+      <button class="btn small b-restore">Restaurer</button>
+    </div>`).join('');
+  box.querySelectorAll('.b-restore').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      onImported(await window.satella.backups.restore(btn.closest('.backup-item').dataset.name));
+    });
+  });
+}
+
+$('#backup-now').addEventListener('click', async () => {
+  const res = await window.satella.backups.now();
+  await refreshBackups();
+  toast(res.ok ? 'Sauvegarde créée.' : 'Sauvegarde impossible (voir le journal).');
+});
+$('#backup-folder').addEventListener('click', () => window.satella.backups.openFolder());
+
+/* ---- Minuteur (Accueil) ---- */
+let TIMER = { running: false, done: false };
+let timerTicker = null;
+
+function fmtDuration(ms) {
+  const total = Math.ceil(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const mmss = `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return h ? `${h}:${mmss}` : mmss;
+}
+
+function renderTimer() {
+  const left = $('#timer-left');
+  left.classList.toggle('running', !!TIMER.running);
+  left.classList.toggle('done', !!TIMER.done);
+  $('#timer-stop').hidden = !TIMER.running && !TIMER.done;
+  if (TIMER.running) left.textContent = fmtDuration(Math.max(0, TIMER.ms - (Date.now() - TIMER.t0)));
+  else left.textContent = TIMER.done ? 'Terminé' : '--:--';
+  clearInterval(timerTicker);
+  timerTicker = TIMER.running ? setInterval(renderTimer, 500) : null;
+}
+
+function onTimerState(st) {
+  TIMER = st || { running: false, done: false };
+  renderTimer();
+}
+
+async function startTimer(minutes) {
+  const m = Math.round(Number(minutes));
+  if (!(m >= 1 && m <= 180)) return toast('Durée entre 1 et 180 minutes.');
+  $('#timer-minutes').value = m;
+  onTimerState(await window.satella.timer.start(m));
+  toast(`Minuteur de ${m} min lancé.`);
+}
+
+$$('[data-timer]').forEach((b) => b.addEventListener('click', () => startTimer(+b.dataset.timer)));
+$('#timer-start').addEventListener('click', () => startTimer($('#timer-minutes').value));
+$('#timer-stop').addEventListener('click', async () => onTimerState(await window.satella.timer.stop()));
+
 async function refreshFootprint() {
   const st = await window.satella.memory.status();
   if (!st) return;
@@ -2437,6 +2568,9 @@ async function init() {
   SHORTCUT_ERRORS = data.shortcutErrors || [];
   ACTIVE_PROFILE = data.active || null;
   DIMMED = !!data.dimmed;
+  LOCKS_AVAILABLE = data.locksAvailable !== false;
+  $('#set-locks-warn').hidden = LOCKS_AVAILABLE;
+  onTimerState(data.timer);
   $('#app-version').textContent = data.version || '?';
   renderSettings(data.settings || SETTINGS);
   SNIPPETS = data.snippets || [];
@@ -2464,6 +2598,12 @@ async function init() {
     DIMMED = dimmed;
     updateBadge();
   });
+  // Luminosité changée par un raccourci de l'application
+  window.satella.led.onState((state) => {
+    STATE = state;
+    syncToolbars();
+  });
+  window.satella.timer.onState(onTimerState);
   window.satella.devices.onDirectStatus(renderDirectPanel);
   window.satella.macros.onRecordEvent((step) => {
     if (!recording) return;
@@ -2480,6 +2620,7 @@ async function init() {
     SHORTCUT_ERRORS = errors || [];
     renderMacroList();
     renderTurbos();
+    renderAppShortcuts();
     if (currentMacro()) {
       const err = shortcutError('macro', currentMacroId);
       const holder = $('#me-trigger');
