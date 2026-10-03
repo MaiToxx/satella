@@ -1,6 +1,6 @@
 // Moteur d'effets lumineux : calcule ~30 images/s les couleurs de chaque
-// touche/zone selon l'effet actif, diffuse aux backends (OpenRGB) et à
-// l'interface (aperçu temps réel).
+// touche/zone selon l'effet actif, pour le flux temps réel vers le clavier
+// (effets logiciels) et l'aperçu de l'interface.
 
 const { EventEmitter } = require('events');
 const layout = require('../shared/layout');
@@ -65,15 +65,27 @@ function hashKey(id, seed) {
   return Math.abs(h);
 }
 
+// Couleur d'un segment de jauge : vert -> jaune -> rouge
+function gaugeColor(f) {
+  return hsvToRgb(120 - 120 * clamp01(f), 1, 1);
+}
+
+const AUDIO_BANDS = 16;
+
 const DEFAULT_DEVICE_STATE = () => ({
-  effect: 'static',        // static | breathing | wave | rainbow | reactive | sparkle | off
+  effect: 'static',        // static | breathing | wave | rainbow | reactive | sparkle | off | effets logiciels
   baseColor: '#00a8ff',
   color2: '#ff00d4',
   speed: 50,               // 0..100
   brightness: 100,         // 0..100
   direction: 'lr',         // lr | rl | tb | bt
   colors: {},              // couleurs personnalisées par touche/zone (mode static)
+  overlay: {},             // calque : touches fixes par-dessus n'importe quel effet
 });
+
+// Rangées utilisées par la jauge système
+const SYSMON_CPU_KEYS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
+const SYSMON_RAM_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'minus', 'equal'];
 
 class LedEngine extends EventEmitter {
   constructor() {
@@ -85,6 +97,14 @@ class LedEngine extends EventEmitter {
     this.sparkles = new Map();
     this.ripples = [];             // ondes de choc {x, y, t0}
     this.drops = [];               // gouttes de pluie {x, t0, v}
+    this.stats = { cpu: 0, ram: 0 };                // jauge système (0..1)
+    this.audio = new Array(AUDIO_BANDS).fill(0);    // spectre lissé (0..1)
+    this.audioTarget = new Array(AUDIO_BANDS).fill(0);
+    this.flashState = null;        // { rgb, t0, ms }
+    this.keyIndex = new Map(layout.keyboard.map((k) => [k.id, k]));
+    // Consommateurs d'images : sans aperçu visible ni flux vers le
+    // clavier, inutile de calculer 30 images/s (remplacé par main.js)
+    this.wantFrames = () => true;
     this._frameCount = 0;
     this.start();
   }
@@ -95,6 +115,47 @@ class LedEngine extends EventEmitter {
     Object.assign(st, patch);
     this.emit('state', this.state);
     this.renderOnce();
+  }
+
+  // Calque de touches fixes (clavier) : s'affiche par-dessus l'effet
+  setOverlay(device, colorMap) {
+    const st = this.state[device];
+    if (!st) return;
+    st.overlay = { ...(st.overlay || {}), ...colorMap };
+    this.emit('state', this.state);
+    this.renderOnce();
+  }
+
+  removeOverlay(device, ids) {
+    const st = this.state[device];
+    if (!st) return;
+    const next = { ...(st.overlay || {}) };
+    for (const id of ids || Object.keys(next)) delete next[id];
+    st.overlay = next;
+    this.emit('state', this.state);
+    this.renderOnce();
+  }
+
+  setSystemStats(stats) {
+    this.stats = { cpu: clamp01(stats.cpu || 0), ram: clamp01(stats.ram || 0) };
+  }
+
+  setAudioBands(bands) {
+    if (!Array.isArray(bands)) return;
+    for (let i = 0; i < AUDIO_BANDS; i++) this.audioTarget[i] = clamp01(Number(bands[i]) || 0);
+  }
+
+  // Flash bref de tout le clavier (retour visuel des macros)
+  flash(rgb, ms = 350) {
+    this.flashState = { rgb, t0: Date.now(), ms };
+    this.renderOnce();
+  }
+
+  flashLevel() {
+    if (!this.flashState) return 0;
+    const age = Date.now() - this.flashState.t0;
+    if (age >= this.flashState.ms) return 0;
+    return 1 - age / this.flashState.ms;
   }
 
   setKeys(device, colorMap) {
@@ -114,9 +175,11 @@ class LedEngine extends EventEmitter {
     this.renderOnce();
   }
 
+  // Les champs absents d'un état sauvegardé (anciennes versions) repartent
+  // des valeurs par défaut au lieu de garder ceux de l'état précédent.
   loadState(saved) {
-    if (saved && saved.keyboard) Object.assign(this.state.keyboard, saved.keyboard);
-    if (saved && saved.mouse) Object.assign(this.state.mouse, saved.mouse);
+    if (saved && saved.keyboard) Object.assign(this.state.keyboard, DEFAULT_DEVICE_STATE(), saved.keyboard);
+    if (saved && saved.mouse) Object.assign(this.state.mouse, DEFAULT_DEVICE_STATE(), saved.mouse);
     this.emit('state', this.state);
     this.renderOnce();
   }
@@ -125,7 +188,7 @@ class LedEngine extends EventEmitter {
   keyActivity(keyId) {
     this.reactiveKeys.set(keyId, 1);
     if (this.state.keyboard.effect === 'ripple') {
-      const k = layout.keyboard.find((x) => x.id === keyId);
+      const k = this.keyIndex.get(keyId);
       if (k) {
         this.ripples.push({ x: k.x + k.w / 2, y: k.y + k.h / 2, t0: this.t });
         if (this.ripples.length > 12) this.ripples.shift();
@@ -145,7 +208,8 @@ class LedEngine extends EventEmitter {
 
   isAnimated(effect) {
     return ['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
-      'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient'].includes(effect);
+      'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
+      'sysmon', 'audio'].includes(effect);
   }
 
   tick() {
@@ -154,10 +218,15 @@ class LedEngine extends EventEmitter {
     const now = Date.now();
     const dt = this._lastTick ? Math.min(0.1, (now - this._lastTick) / 1000) : 1 / FPS;
     this._lastTick = now;
+    this.dt = dt;
     const kbAnim = this.isAnimated(this.state.keyboard.effect);
     const msAnim = this.isAnimated(this.state.mouse.effect);
-    if (!kbAnim && !msAnim) return; // statique : rien à recalculer
+    // Un flash en cours (ou qui vient de finir) doit être dessiné puis effacé
+    const flashing = this.flashState && now - this.flashState.t0 < this.flashState.ms + 100;
+    if (!flashing) this.flashState = null;
+    if (!kbAnim && !msAnim && !flashing) return; // statique : rien à recalculer
     this.t += dt;
+    if (!this.wantFrames() && !flashing) return; // personne ne regarde
     this.renderOnce();
   }
 
@@ -176,6 +245,20 @@ class LedEngine extends EventEmitter {
     const base = hexToRgb(st.baseColor);
     const color2 = hexToRgb(st.color2 || '#ff00d4');
     const out = {};
+
+    // Temps réel écoulé depuis le dernier calcul : les décroissances ne
+    // dépendent pas de la cadence d'images
+    const nowMs = Date.now();
+    const elapsed = this._lastCompute ? Math.min(0.1, (nowMs - this._lastCompute) / 1000) : 1 / FPS;
+    this._lastCompute = nowMs;
+
+    // Spectre audio : montée immédiate, retombée progressive
+    if (st.effect === 'audio') {
+      for (let i = 0; i < AUDIO_BANDS; i++) {
+        const target = this.audioTarget[i];
+        this.audio[i] = target >= this.audio[i] ? target : Math.max(target, this.audio[i] - 1.6 * elapsed);
+      }
+    }
 
     // Apparition des gouttes (effet pluie)
     if (st.effect === 'rain' && Math.random() < 0.05 * (0.5 + speed * 1.5)) {
@@ -279,23 +362,57 @@ class LedEngine extends EventEmitter {
           rgb = lerpRgb(base, color2, f);
           break;
         }
+        case 'sysmon': {
+          // Jauge système : F1-F12 = processeur, 1 à = = mémoire vive
+          const cpuIdx = SYSMON_CPU_KEYS.indexOf(key.id);
+          const ramIdx = SYSMON_RAM_KEYS.indexOf(key.id);
+          const idx = cpuIdx >= 0 ? cpuIdx : ramIdx;
+          if (idx >= 0) {
+            const value = cpuIdx >= 0 ? this.stats.cpu : this.stats.ram;
+            const n = SYSMON_CPU_KEYS.length;
+            const lit = clamp01(value * n - idx); // remplissage partiel du dernier segment
+            rgb = scale(gaugeColor(idx / (n - 1)), 0.06 + 0.94 * lit);
+          } else {
+            rgb = scale(base, 0.25);
+          }
+          break;
+        }
+        case 'audio': {
+          // Visualiseur : une colonne de touches par bande de fréquence,
+          // remplie depuis le bas selon le niveau
+          const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
+          const band = Math.min(AUDIO_BANDS - 1, Math.floor((cx / layout.bounds.w) * AUDIO_BANDS));
+          const height = (layout.bounds.h - cy) / layout.bounds.h; // 0 bas .. 1 haut
+          const level = this.audio[band];
+          rgb = level >= height ? lerpRgb(base, color2, height) : scale(base, 0.04);
+          break;
+        }
         default:
           rgb = base;
       }
+      // Calque : touches fixes par-dessus l'effet (sauf « éteint »)
+      if (st.overlay && st.overlay[key.id] && st.effect !== 'off') rgb = hexToRgb(st.overlay[key.id]);
       out[key.id] = scale(rgb, bright);
+    }
+
+    // Flash bref (retour visuel des macros) par-dessus tout le reste
+    const fl = this.flashLevel();
+    if (fl > 0) {
+      for (const id of Object.keys(out)) out[id] = lerpRgb(out[id], this.flashState.rgb, fl);
     }
 
     // Nettoyage des ondes et gouttes expirées
     this.ripples = this.ripples.filter((rp) => this.t - rp.t0 < 2.5);
     this.drops = this.drops.filter((dr) => (this.t - dr.t0) * dr.v < layout.bounds.h + 4);
 
-    // Décroissance des effets réactif/étincelles
+    // Décroissance des effets réactif/étincelles (mêmes vitesses qu'avant
+    // à 30 img/s, mais indexées sur le temps réel)
     for (const [k, v] of this.reactiveKeys) {
-      const nv = v - 0.04 * (0.5 + speed);
+      const nv = v - 1.2 * (0.5 + speed) * elapsed;
       if (nv <= 0) this.reactiveKeys.delete(k); else this.reactiveKeys.set(k, nv);
     }
     for (const [k, v] of this.sparkles) {
-      const nv = v - 0.03 * (0.5 + speed);
+      const nv = v - 0.9 * (0.5 + speed) * elapsed;
       if (nv <= 0) this.sparkles.delete(k); else this.sparkles.set(k, nv);
     }
     return out;
@@ -340,4 +457,4 @@ class LedEngine extends EventEmitter {
   }
 }
 
-module.exports = { LedEngine, hexToRgb };
+module.exports = { LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS };

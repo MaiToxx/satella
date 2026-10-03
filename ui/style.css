@@ -496,3 +496,51 @@ details > summary:hover { color: var(--text); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================ Ajouts 1.5 ================================== */
+.fx-hint { font-size: 12px; color: var(--muted); max-width: 340px; line-height: 1.4; }
+
+/* Touches du calque : repère en coin */
+.kb-key.in-overlay::after {
+  content: ''; position: absolute; right: 4px; top: 4px; z-index: 3;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+}
+
+/* Barre latérale : extinction rapide et profil actif */
+.side-toggle {
+  margin-top: 4px; padding: 6px 8px; border-radius: 5px;
+  border: 1px solid var(--line2); background: transparent; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .03em; cursor: pointer;
+}
+.side-toggle:hover { color: var(--text); border-color: var(--faint); }
+.side-toggle.on { color: var(--warn); border-color: var(--warn); }
+.side-profile {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.side-profile b { color: var(--muted); font-weight: 600; }
+
+/* Macros : modifications en cours, raccourci refusé */
+.macro-item .m-unsaved { color: var(--warn); font-size: 10px; vertical-align: middle; }
+.macro-item .m-warn { color: var(--warn); display: flex; }
+.macro-item .m-trigger.bad { color: var(--warn); background: rgba(232,176,75,.12); text-decoration: line-through; }
+.warn-text { color: var(--warn); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+
+.steps-head { display: flex; align-items: center; gap: 8px; }
+.steps-head h2 { margin-right: 4px; }
+.steps-head #me-unsaved { flex: 1; color: var(--warn); }
+.steps-head .icon-btn:disabled { opacity: .35; cursor: default; background: transparent; }
+
+/* Glisser-déposer des étapes */
+.step-row .s-grip { color: var(--faint); cursor: grab; display: flex; margin-left: -4px; }
+.step-row .s-grip .icon { width: 15px; height: 15px; stroke-width: 3; }
+.step-row.dragging { opacity: .45; }
+.step-row.drop-target { box-shadow: 0 -2px 0 var(--accent); }
+.step-row.add-row.drop-target { box-shadow: inset 0 0 0 1px var(--accent); }
+.step-row.add-row { background: transparent; border-style: dashed; }
+
+.rec-opts .check { font-size: 12px; color: var(--muted); }
+
+/* Profils */
+.profile-row.active { background: color-mix(in srgb, var(--accent) 5%, transparent); border-radius: 6px; }

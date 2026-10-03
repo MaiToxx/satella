@@ -2,7 +2,7 @@
 // Fournit : appui/relâchement de touches, frappe de texte Unicode,
 // clics/mouvements/molette souris.
 
-let koffi, SendInput, GetSystemMetrics;
+let koffi, SendInput, GetSystemMetrics, MapVirtualKeyW;
 let available = false;
 let loadError = null;
 
@@ -22,9 +22,13 @@ const MOUSEEVENTF_XDOWN = 0x0080;
 const MOUSEEVENTF_XUP = 0x0100;
 const MOUSEEVENTF_WHEEL = 0x0800;
 const MOUSEEVENTF_HWHEEL = 0x1000;
+const MOUSEEVENTF_VIRTUALDESK = 0x4000;
 const MOUSEEVENTF_ABSOLUTE = 0x8000;
-const SM_CXSCREEN = 0;
-const SM_CYSCREEN = 1;
+const SM_XVIRTUALSCREEN = 76;
+const SM_YVIRTUALSCREEN = 77;
+const SM_CXVIRTUALSCREEN = 78;
+const SM_CYVIRTUALSCREEN = 79;
+const MAPVK_VK_TO_VSC_EX = 4;
 
 let INPUT_SIZE = 0;
 
@@ -46,6 +50,7 @@ try {
   INPUT_SIZE = koffi.sizeof(INPUT);
   SendInput = user32.func('uint32 SendInput(uint32 cInputs, SATELLA_INPUT *pInputs, int cbSize)');
   GetSystemMetrics = user32.func('int GetSystemMetrics(int nIndex)');
+  MapVirtualKeyW = user32.func('uint32 MapVirtualKeyW(uint32 uCode, uint32 uMapType)');
   available = true;
 } catch (err) {
   loadError = err;
@@ -71,29 +76,58 @@ function sendMouse(events) {
   return SendInput(inputs.length, inputs, INPUT_SIZE);
 }
 
-function keyFlags(name, up) {
-  let flags = EXTENDED.has(name) ? KEYEVENTF_EXTENDEDKEY : 0;
+// Scancode matériel de la touche : beaucoup de jeux (DirectInput, Raw
+// Input) lisent le scancode et ignorent une frappe qui n'en a pas.
+// MAPVK_VK_TO_VSC_EX donne aussi le préfixe E0 des touches étendues
+// (multimédia, flèches...) ; une touche à préfixe E1 (Pause) est envoyée
+// sans scancode plutôt qu'avec un code trompeur.
+const scanCache = new Map();
+function scanFor(vk) {
+  if (!scanCache.has(vk)) {
+    let res = { scan: 0, extended: false };
+    if (MapVirtualKeyW) {
+      try {
+        const ex = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX);
+        const prefix = (ex >> 8) & 0xff;
+        if (prefix === 0xe0) res = { scan: ex & 0xff, extended: true };
+        else if (prefix === 0) res = { scan: ex & 0xff, extended: false };
+      } catch { /* inconnu */ }
+    }
+    scanCache.set(vk, res);
+  }
+  return scanCache.get(vk);
+}
+
+function vkFor(name) {
+  const vk = VK[name];
+  if (vk === undefined) throw new Error(`Touche inconnue : ${name}`);
+  return vk;
+}
+
+function keyEvent(name, up) {
+  const vk = vkFor(name);
+  const { scan, extended } = scanFor(vk);
+  let flags = EXTENDED.has(name) || extended ? KEYEVENTF_EXTENDEDKEY : 0;
   if (up) flags |= KEYEVENTF_KEYUP;
-  return flags;
+  sendKeyboard([{ vk, scan, flags }]);
 }
 
-function keyDown(name) {
-  const vk = VK[name];
-  if (vk === undefined) throw new Error(`Touche inconnue : ${name}`);
-  sendKeyboard([{ vk, flags: keyFlags(name, false) }]);
-}
+function keyDown(name) { keyEvent(name, false); }
 
-function keyUp(name) {
-  const vk = VK[name];
-  if (vk === undefined) throw new Error(`Touche inconnue : ${name}`);
-  sendKeyboard([{ vk, flags: keyFlags(name, true) }]);
-}
+function keyUp(name) { keyEvent(name, true); }
 
 function keyTap(name, modifiers = []) {
+  // Vérifie toutes les touches avant d'appuyer : une touche inconnue ne
+  // doit pas laisser un modificateur enfoncé
+  vkFor(name);
+  modifiers.forEach(vkFor);
   for (const m of modifiers) keyDown(m);
-  keyDown(name);
-  keyUp(name);
-  for (const m of [...modifiers].reverse()) keyUp(m);
+  try {
+    keyDown(name);
+    keyUp(name);
+  } finally {
+    for (const m of [...modifiers].reverse()) keyUp(m);
+  }
 }
 
 function typeText(text) {
@@ -111,6 +145,27 @@ function typeText(text) {
   }
   // Envoi par petits lots pour rester fluide
   for (let i = 0; i < events.length; i += 64) sendKeyboard(events.slice(i, i + 64));
+}
+
+// Découpe un texte libre en morceaux : texte Unicode, Entrée, Tab.
+// Les sauts de ligne envoyés en Unicode sont ignorés par beaucoup
+// d'applications : ils deviennent de vraies touches.
+function splitText(text) {
+  const parts = [];
+  for (const piece of String(text || '').split(/(\r?\n|\t)/)) {
+    if (!piece) continue;
+    if (piece === '\t') parts.push({ key: 'tab' });
+    else if (piece === '\n' || piece === '\r\n') parts.push({ key: 'enter' });
+    else parts.push({ text: piece });
+  }
+  return parts;
+}
+
+function typeTextLines(text) {
+  for (const part of splitText(text)) {
+    if (part.key) keyTap(part.key);
+    else typeText(part.text);
+  }
 }
 
 const BUTTON_FLAGS = {
@@ -134,15 +189,30 @@ function mouseClick(button = 'left', count = 1) {
   }
 }
 
+// Coordonnées absolues normalisées (0..65535) sur le bureau virtuel :
+// tous les écrans, y compris ceux placés à gauche ou au-dessus du
+// principal (coordonnées négatives), comme celles de l'enregistreur.
+function normalizeAbsolute(x, y, desk) {
+  const nx = Math.round(((x - desk.x) * 65535) / Math.max(1, desk.w - 1));
+  const ny = Math.round(((y - desk.y) * 65535) / Math.max(1, desk.h - 1));
+  return {
+    dx: Math.max(0, Math.min(65535, nx)),
+    dy: Math.max(0, Math.min(65535, ny)),
+  };
+}
+
 function mouseMove(x, y, relative = false) {
   if (relative) {
     sendMouse([{ dx: Math.round(x), dy: Math.round(y), flags: MOUSEEVENTF_MOVE }]);
   } else {
-    const sw = GetSystemMetrics(SM_CXSCREEN);
-    const sh = GetSystemMetrics(SM_CYSCREEN);
-    const nx = Math.round((x / (sw - 1)) * 65535);
-    const ny = Math.round((y / (sh - 1)) * 65535);
-    sendMouse([{ dx: nx, dy: ny, flags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE }]);
+    const desk = {
+      x: GetSystemMetrics(SM_XVIRTUALSCREEN),
+      y: GetSystemMetrics(SM_YVIRTUALSCREEN),
+      w: GetSystemMetrics(SM_CXVIRTUALSCREEN),
+      h: GetSystemMetrics(SM_CYVIRTUALSCREEN),
+    };
+    const { dx, dy } = normalizeAbsolute(x, y, desk);
+    sendMouse([{ dx, dy, flags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK }]);
   }
 }
 
@@ -153,6 +223,7 @@ function mouseWheel(delta, horizontal = false) {
 module.exports = {
   available,
   loadError,
-  keyDown, keyUp, keyTap, typeText,
+  keyDown, keyUp, keyTap, typeText, typeTextLines, splitText,
   mouseButton, mouseClick, mouseMove, mouseWheel,
+  normalizeAbsolute,
 };

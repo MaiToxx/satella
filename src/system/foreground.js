@@ -22,15 +22,20 @@ const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
 const available = () => !!koffi;
 
-// Nom de l'exécutable au premier plan, en minuscules (ex. « game.exe »),
-// ou null si indisponible.
-function currentExe() {
+// PID du processus au premier plan, ou null si indisponible.
+function currentPid() {
   if (!koffi) return null;
   const hwnd = k.GetForegroundWindow();
   if (!hwnd) return null;
   const pidOut = [0];
   k.GetWindowThreadProcessId(hwnd, pidOut);
-  const pid = pidOut[0];
+  return pidOut[0] || null;
+}
+
+// Nom de l'exécutable au premier plan, en minuscules (ex. « game.exe »),
+// ou null si indisponible.
+function currentExe() {
+  const pid = currentPid();
   if (!pid) return null;
   const h = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
   if (!h) return null;
@@ -48,4 +53,4 @@ function currentExe() {
   }
 }
 
-module.exports = { available, currentExe };
+module.exports = { available, currentExe, currentPid };

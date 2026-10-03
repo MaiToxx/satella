@@ -115,8 +115,11 @@ function enablePrivilege(name) {
   }
 }
 
-// Vide le working set de chaque processus accessible. Renvoie le nombre traité.
-function emptyAllWorkingSets() {
+// Vide le working set de chaque processus accessible, sauf ceux exclus
+// (l'application au premier plan : un jeu dont on vide la mémoire
+// saccade le temps de la recharger). Renvoie le nombre traité.
+function emptyAllWorkingSets(excludePids = []) {
+  const excluded = new Set(excludePids.filter(Boolean));
   const CAP = 2048;
   const pids = new Uint32Array(CAP);
   const needed = [0];
@@ -125,7 +128,7 @@ function emptyAllWorkingSets() {
   let done = 0;
   for (let i = 0; i < count; i++) {
     const pid = pids[i];
-    if (!pid) continue;
+    if (!pid || excluded.has(pid)) continue;
     const h = k.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, 0, pid);
     if (!h) continue;
     try { if (k.EmptyWorkingSet(h)) done++; } catch { /* refusé */ }
@@ -148,12 +151,26 @@ function purgeSystem() {
   return ok;
 }
 
+// Purge de la seule liste « standby » (cache de fichiers) : libère de la
+// RAM sans toucher aux pages actives des processus. Admin requis.
+function purgeStandbyOnly() {
+  enablePrivilege('SeProfileSingleProcessPrivilege');
+  try {
+    return k.NtSetSystemInformation(SYSTEM_MEMORY_LIST_INFORMATION, [MEMORY_PURGE_STANDBY_LIST], 4) === 0;
+  } catch {
+    return false;
+  }
+}
+
 // Optimisation complète : working sets (toujours) + purge système (si admin).
-function optimize() {
+// `excludePids` : processus à épargner. La purge système vide aussi les
+// working sets de tous les processus ; on ne l'utilise donc que quand
+// rien n'est à épargner (déclenchement manuel).
+function optimize({ excludePids = [] } = {}) {
   if (!koffi) return { ok: false, error: loadError ? loadError.message : 'indisponible' };
   const before = readStatus();
-  const processes = emptyAllWorkingSets();
-  const systemPurged = purgeSystem();
+  const processes = emptyAllWorkingSets(excludePids);
+  const systemPurged = excludePids.length ? purgeStandbyOnly() : purgeSystem();
   const after = readStatus();
   const freed = before && after ? after.availPhys - before.availPhys : 0;
   return {

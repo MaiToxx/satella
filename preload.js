@@ -12,6 +12,10 @@ function on(channel) {
 contextBridge.exposeInMainWorld('satella', {
   init: () => ipcRenderer.invoke('app:init'),
   ready: () => ipcRenderer.invoke('app:ready'),
+  setPage: (page) => ipcRenderer.send('ui:page', page),
+  diagnostic: () => ipcRenderer.invoke('app:diagnostic'),
+  openLogs: () => ipcRenderer.invoke('app:openLogs'),
+  openData: () => ipcRenderer.invoke('app:openData'),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
@@ -24,7 +28,18 @@ contextBridge.exposeInMainWorld('satella', {
     set: (device, patch) => ipcRenderer.invoke('led:set', device, patch),
     setKeys: (device, colors) => ipcRenderer.invoke('led:setKeys', device, colors),
     clearKeys: (device) => ipcRenderer.invoke('led:clearKeys', device),
+    setOverlay: (device, colors) => ipcRenderer.invoke('led:setOverlay', device, colors),
+    removeOverlay: (device, ids) => ipcRenderer.invoke('led:removeOverlay', device, ids),
+    setManualOff: (on) => ipcRenderer.invoke('leds:setManualOff', on),
     onFrame: on('led:frame'),
+    onDimmed: on('leds:dimmed'),
+  },
+
+  // Visualiseur audio : le spectre calculé dans l'interface part vers le moteur
+  audio: {
+    sendBands: (bands) => ipcRenderer.send('audio:bands', bands),
+    reportError: (message) => ipcRenderer.send('audio:error', message),
+    onStop: on('audio:stop'),
   },
 
   devices: {
@@ -39,7 +54,7 @@ contextBridge.exposeInMainWorld('satella', {
   macros: {
     save: (macro) => ipcRenderer.invoke('macros:save', macro),
     remove: (id) => ipcRenderer.invoke('macros:remove', id),
-    play: (id) => ipcRenderer.invoke('macros:play', id),
+    play: (id, draft) => ipcRenderer.invoke('macros:play', id, draft),
     stop: (id) => ipcRenderer.invoke('macros:stop', id),
     recordStart: (opts) => ipcRenderer.invoke('macros:recordStart', opts),
     recordStop: () => ipcRenderer.invoke('macros:recordStop'),
@@ -47,6 +62,11 @@ contextBridge.exposeInMainWorld('satella', {
     onPlayState: on('macro:play-state'),
     onPlayError: on('macro:play-error'),
     onKeyActivity: on('macro:key-activity'),
+  },
+
+  shortcuts: {
+    errors: () => ipcRenderer.invoke('shortcuts:errors'),
+    onErrors: on('shortcuts:errors'),
   },
 
   snippets: {
@@ -83,8 +103,16 @@ contextBridge.exposeInMainWorld('satella', {
     list: () => ipcRenderer.invoke('profiles:list'),
     save: (name) => ipcRenderer.invoke('profiles:save', name),
     load: (name) => ipcRenderer.invoke('profiles:load', name),
+    rename: (oldName, newName) => ipcRenderer.invoke('profiles:rename', oldName, newName),
     remove: (name) => ipcRenderer.invoke('profiles:remove', name),
     setMeta: (name, meta) => ipcRenderer.invoke('profiles:setMeta', name, meta),
     onAutoApplied: on('profiles:autoApplied'),
+    onChanged: on('profiles:changed'),
+  },
+
+  data: {
+    exportProfile: (name) => ipcRenderer.invoke('data:export', 'profile', name),
+    exportAll: () => ipcRenderer.invoke('data:export', 'backup'),
+    import: () => ipcRenderer.invoke('data:import'),
   },
 });

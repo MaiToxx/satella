@@ -1,0 +1,27 @@
+# Vérifications à chaque push et pull request : syntaxe et tests unitaires.
+# Les tests n'ont besoin ni de matériel ni des modules natifs (repli
+# automatique quand node-hid, koffi ou uiohook sont absents).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntaxe
+        run: |
+          for f in main.js preload.js $(find src ui test -name '*.js'); do
+            node --check "$f"
+          done
+      - name: Tests unitaires
+        run: node --test "test/*.test.js"

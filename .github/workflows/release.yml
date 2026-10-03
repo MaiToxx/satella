@@ -1,0 +1,35 @@
+# Publication : pousser une étiquette vX.Y.Z (même numéro que package.json)
+# construit l'installeur Windows et le publie dans les releases GitHub,
+# où la mise à jour automatique de Satella va le chercher.
+#   git tag v1.5.0 && git push origin v1.5.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Version de l'étiquette = version du paquet
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if [ "v$v" != "${GITHUB_REF_NAME}" ]; then
+            echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à package.json ($v)"; exit 1
+          fi
+      - run: npm ci
+      - run: node --test "test/*.test.js"
+      - name: Construire et publier
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
