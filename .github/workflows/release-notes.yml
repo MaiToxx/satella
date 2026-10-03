@@ -1,0 +1,29 @@
+# Recopie build/release-notes.md sur la page d'une release GitHub déjà
+# publiée (onglet Actions > Notes de version > Run workflow).
+# Sans étiquette indiquée : la version actuelle de package.json.
+name: Notes de version
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Étiquette de la release (vide = version de package.json, ex. v1.5.0)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mettre à jour les notes
+        run: |
+          tag="${TAG:-v$(node -p "require('./package.json').version")}"
+          gh release edit "$tag" --notes-file build/release-notes.md
+          echo "Notes de version de $tag mises à jour"

@@ -77,4 +77,4 @@ jobs:
           for f in latest.yml "Satella-Setup-$v.exe" "Satella-Setup-$v.exe.blockmap"; do
             echo "$assets" | grep -qx "$f" || { echo "Fichier manquant dans la release : $f"; exit 1; }
           done
-          gh release edit "v$v" --draft=false --latest
+          gh release edit "v$v" --draft=false --latest --notes-file build/release-notes.md
