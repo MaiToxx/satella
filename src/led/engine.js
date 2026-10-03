@@ -108,6 +108,8 @@ class LedEngine extends EventEmitter {
     this.screen = new Float32Array(SCREEN_COLS * SCREEN_ROWS * 3);       // couleurs lissées
     this.screenTarget = new Uint8Array(SCREEN_COLS * SCREEN_ROWS * 3);   // dernière capture
     this.flashState = null;        // { rgb, t0, ms }
+    this.heat = {};                // carte de chaleur : touche -> nombre de frappes
+    this.dimFactor = 1;            // atténuation globale (mode nuit), 0..1
     this.keyIndex = new Map(layout.keyboard.map((k) => [k.id, k]));
     // Consommateurs d'images : sans aperçu visible ni flux vers le
     // clavier, inutile de calculer 30 images/s (remplacé par main.js)
@@ -157,6 +159,18 @@ class LedEngine extends EventEmitter {
     if (!grid || typeof grid.length !== 'number') return;
     const n = Math.min(grid.length, this.screenTarget.length);
     for (let i = 0; i < n; i++) this.screenTarget[i] = Math.max(0, Math.min(255, Number(grid[i]) || 0));
+  }
+
+  // Compteurs de frappes (référence partagée, mise à jour par main.js)
+  setHeatmap(counts) {
+    this.heat = counts && typeof counts === 'object' ? counts : {};
+  }
+
+  // Atténuation globale de l'aperçu et du flux (mode nuit « atténuer »)
+  setDimFactor(f) {
+    const v = Number(f);
+    this.dimFactor = Number.isFinite(v) ? clamp01(v) : 1;
+    this.renderOnce();
   }
 
   // Flash bref de tout le clavier (retour visuel des macros)
@@ -223,7 +237,7 @@ class LedEngine extends EventEmitter {
   isAnimated(effect) {
     return ['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
       'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
-      'sysmon', 'audio', 'screen'].includes(effect);
+      'sysmon', 'audio', 'screen', 'heatmap'].includes(effect);
   }
 
   tick() {
@@ -254,7 +268,7 @@ class LedEngine extends EventEmitter {
 
   computeKeyboard() {
     const st = this.state.keyboard;
-    const bright = st.brightness / 100;
+    const bright = (st.brightness / 100) * this.dimFactor;
     const speed = 0.2 + (st.speed / 100) * 2.3;
     const base = hexToRgb(st.baseColor);
     const color2 = hexToRgb(st.color2 || '#ff00d4');
@@ -281,6 +295,15 @@ class LedEngine extends EventEmitter {
       for (let i = 0; i < this.screen.length; i++) {
         this.screen[i] += (this.screenTarget[i] - this.screen[i]) * k;
       }
+    }
+
+    // Carte de chaleur : échelle logarithmique (les touches très utilisées
+    // n'écrasent pas toutes les autres)
+    let heatLog = 0;
+    if (st.effect === 'heatmap') {
+      let max = 0;
+      for (const v of Object.values(this.heat)) if (v > max) max = v;
+      heatLog = Math.log1p(max);
     }
 
     // Apparition des gouttes (effet pluie)
@@ -410,6 +433,16 @@ class LedEngine extends EventEmitter {
           rgb = level >= height ? lerpRgb(base, color2, height) : scale(base, 0.04);
           break;
         }
+        case 'heatmap': {
+          const c = this.heat[key.id] || 0;
+          if (!c || !heatLog) {
+            rgb = scale(base, 0.06);
+          } else {
+            const f = Math.log1p(c) / heatLog;           // 0..1
+            rgb = hsvToRgb(240 - 240 * f, 1, 0.3 + 0.7 * f); // bleu -> vert -> jaune -> rouge
+          }
+          break;
+        }
         case 'screen': {
           const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
           const col = Math.min(SCREEN_COLS - 1, Math.floor((cx / layout.bounds.w) * SCREEN_COLS));
@@ -451,7 +484,7 @@ class LedEngine extends EventEmitter {
 
   computeMouse() {
     const st = this.state.mouse;
-    const bright = st.brightness / 100;
+    const bright = (st.brightness / 100) * this.dimFactor;
     const speed = 0.2 + (st.speed / 100) * 2.3;
     const base = hexToRgb(st.baseColor);
     const out = {};

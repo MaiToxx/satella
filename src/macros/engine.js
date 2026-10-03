@@ -45,9 +45,13 @@ class MacroEngine extends EventEmitter {
     this.lastEventTime = 0;
     this.hookStarted = false;
     this.suppressRecord = false;
+    this.waiters = 0; // étapes « Attendre une touche » en cours
   }
 
   get busy() { return this.playing.size > 0; }
+
+  // Une étape attend une touche : l'écoute globale doit rester active
+  get waitingForKey() { return this.waiters > 0; }
 
   // ---- Déclencheurs -------------------------------------------------------
   // Renvoie la liste des raccourcis refusés (déjà pris par une autre
@@ -121,7 +125,7 @@ class MacroEngine extends EventEmitter {
   // actions souris ?
   needsInput(steps, seen = new Set()) {
     return (steps || []).some((s) => {
-      if (s.type === 'delay' || s.type === 'open') return false;
+      if (s.type === 'delay' || s.type === 'open' || s.type === 'waitKey') return false;
       if (s.type === 'loop') return this.needsInput(s.steps, seen);
       if (s.type === 'runMacro') {
         if (seen.has(s.macroId)) return false;
@@ -222,6 +226,9 @@ class MacroEngine extends EventEmitter {
           if (!this.opener) throw new Error('ouverture de programmes indisponible');
           await this.opener(step.target || '');
           break;
+        case 'waitKey':
+          await this.waitForKey(ctx, step.key, step.timeoutMs || 0);
+          break;
         case 'loop': {
           const count = Math.max(1, step.count || 1);
           for (let i = 0; i < count && !ctx.cancelled; i++) {
@@ -245,6 +252,36 @@ class MacroEngine extends EventEmitter {
         await sleep(Math.max(2, this.duration(step.gapMs !== undefined ? step.gapMs : 15, opts)));
       }
     }
+  }
+
+  // Attend l'appui sur `key` (écoute globale), un délai maximal (0 = sans
+  // limite) ou l'arrêt de la macro. Renvoie true si la touche a été pressée.
+  waitForKey(ctx, key, timeoutMs) {
+    if (!this.startActivityFeed()) {
+      throw new Error("écoute du clavier indisponible : impossible d'attendre une touche");
+    }
+    this.waiters++;
+    this.emit('wait-change');
+    return new Promise((resolve) => {
+      let done = false;
+      let timer = null;
+      let poll = null;
+      let onKey = null;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        clearInterval(poll);
+        clearTimeout(timer);
+        this.off('key-activity', onKey);
+        this.waiters--;
+        this.emit('wait-change');
+        resolve(result);
+      };
+      onKey = (e) => { if (e.down && e.key === key) finish(true); };
+      this.on('key-activity', onKey);
+      poll = setInterval(() => { if (ctx.cancelled) finish(false); }, 50);
+      if (timeoutMs > 0) timer = setTimeout(() => finish(false), timeoutMs);
+    });
   }
 
   stop(id) {
@@ -292,7 +329,7 @@ class MacroEngine extends EventEmitter {
 
   // Coupe l'écoute globale quand plus rien n'en a besoin (économie de ressources)
   stopActivityFeed() {
-    if (this.recording || !this.hookStarted || !uiohook) return;
+    if (this.recording || this.waiters > 0 || !this.hookStarted || !uiohook) return;
     try { uiohook.stop(); } catch { /* déjà arrêté */ }
     this.hookStarted = false;
   }

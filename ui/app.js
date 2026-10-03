@@ -45,6 +45,7 @@ const EFFECTS = [
   ['sysmon', 'Jauge système'],
   ['audio', 'Visualiseur audio'],
   ['screen', 'Ambiance écran'],
+  ['heatmap', 'Carte de chaleur'],
   ['off', 'Éteint'],
 ];
 const MOUSE_EFFECTS = [
@@ -59,6 +60,7 @@ const EFFECT_HINTS = {
   sysmon: 'F1 à F12 : charge du processeur. Rangée des chiffres : mémoire vive. Les autres touches gardent la couleur choisie, atténuée.',
   audio: 'Le son joué par Windows anime le clavier : une colonne par bande de fréquence. La couleur 2 colore le haut des colonnes.',
   screen: 'Le clavier reprend les couleurs de l\'écran principal, zone par zone (films, jeux). La vitesse règle la réactivité.',
+  heatmap: 'Chaque touche prend la couleur de son usage : bleu = rarement, rouge = très souvent. Seul le nombre d\'appuis par touche est compté, sur ce PC.',
 };
 const COLOR2_EFFECTS = ['gradient', 'audio'];
 
@@ -195,6 +197,7 @@ function showPage(name) {
     memTimer = setInterval(refreshMemory, 2000);
   } else if (name === 'settings') {
     refreshFootprint();
+    refreshStatsInfo();
     syncStartupState();
   } else if (name === 'profiles' && pendingProfiles) {
     renderProfiles(pendingProfiles);
@@ -328,8 +331,7 @@ function buildKeyboard() {
 
 function onKeyClick(id, e) {
   if ($('#kb-paint').checked) {
-    const color = $('#kb-color').value;
-    window.satella.led.setKeys('keyboard', { [id]: color });
+    applyKeyColors({ [id]: $('#kb-color').value });
     return;
   }
   if (e.ctrlKey) {
@@ -400,6 +402,115 @@ function refreshOverlayMarks() {
   });
 })();
 
+/* ---- Coloration : annuler / rétablir, couleurs récentes, préréglages ---- */
+const kbHistory = { past: [], future: [] };
+
+function kbSnapshot() {
+  const k = STATE.keyboard;
+  return clone({ effect: k.effect, colors: k.colors || {}, overlay: k.overlay || {} });
+}
+
+function resetKbHistory() {
+  kbHistory.past = [];
+  kbHistory.future = [];
+  updateKbHistoryButtons();
+}
+
+function updateKbHistoryButtons() {
+  $('#kb-undo').disabled = !kbHistory.past.length;
+  $('#kb-redo').disabled = !kbHistory.future.length;
+}
+
+// Mémorise l'état avant une modification de coloration
+function kbPush() {
+  kbHistory.past.push(kbSnapshot());
+  if (kbHistory.past.length > 50) kbHistory.past.shift();
+  kbHistory.future = [];
+  updateKbHistoryButtons();
+}
+
+function kbRestore(redo) {
+  const from = redo ? kbHistory.future : kbHistory.past;
+  const to = redo ? kbHistory.past : kbHistory.future;
+  if (!from.length) return;
+  to.push(kbSnapshot());
+  const snap = from.pop();
+  Object.assign(STATE.keyboard, snap);
+  window.satella.led.set('keyboard', snap);
+  syncToolbars();
+  updateKbHistoryButtons();
+}
+
+// Couleurs par touche (mode statique), avec historique et couleurs récentes
+function applyKeyColors(map, { remember = true } = {}) {
+  kbPush();
+  window.satella.led.setKeys('keyboard', map);
+  STATE.keyboard.colors = { ...(STATE.keyboard.colors || {}), ...map };
+  STATE.keyboard.effect = 'static';
+  if (remember) rememberColor(Object.values(map)[0]);
+  syncToolbars();
+}
+
+const RECENT_KEY = 'satella.recentColors';
+let recentColors = [];
+try { recentColors = JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { recentColors = []; }
+
+function rememberColor(c) {
+  if (!/^#[0-9a-f]{6}$/i.test(c || '')) return;
+  const color = c.toLowerCase();
+  recentColors = [color, ...recentColors.filter((x) => x !== color)].slice(0, 8);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(recentColors)); } catch { /* stockage indisponible */ }
+  renderRecentColors();
+}
+
+function renderRecentColors() {
+  const cont = $('#kb-recent');
+  cont.innerHTML = '';
+  $('#kb-recent-label').hidden = !recentColors.length;
+  for (const c of recentColors) {
+    if (!/^#[0-9a-f]{6}$/i.test(c)) continue;
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    sw.style.background = c;
+    sw.title = c;
+    sw.addEventListener('click', () => {
+      $('#kb-color').value = c;
+      onBaseColor('keyboard', c);
+    });
+    cont.appendChild(sw);
+  }
+}
+
+const hexRgb = (h) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+const rgbHex = (r, g, b) => '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+function hueHex(h) {
+  const f = (n) => { const k = (n + h / 60) % 6; return 255 * (1 - Math.max(0, Math.min(k, 4 - k, 1))); };
+  return rgbHex(f(5), f(3), f(1));
+}
+
+// Préréglages : une couleur pour chaque touche du clavier
+function presetColors(kind) {
+  const c1 = $('#kb-color').value;
+  const c2 = STATE.keyboard.color2 || '#ff00d4';
+  const [a, b] = [hexRgb(c1), hexRgb(c2)];
+  const moves = new Set(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right']);
+  const map = {};
+  for (const k of LAYOUT.keyboard) {
+    switch (kind) {
+      case 'moves': map[k.id] = moves.has(k.id) ? c1 : c2; break;
+      case 'rows': map[k.id] = hueHex((k.y / 6) * 300); break;
+      case 'gradient': {
+        const f = (k.x + k.w / 2) / LAYOUT.bounds.w;
+        map[k.id] = rgbHex(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
+        break;
+      }
+      case 'numpad': map[k.id] = /^(np|numlock)/.test(k.id) ? c2 : c1; break;
+      default: break;
+    }
+  }
+  return map;
+}
+
 function buildToolbars() {
   // Effets clavier
   const kbFx = $('#kb-effects');
@@ -464,16 +575,25 @@ function buildToolbars() {
     const color = $('#kb-color').value;
     const map = {};
     for (const id of kbSelection) map[id] = color;
-    window.satella.led.setKeys('keyboard', map);
-    STATE.keyboard.effect = 'static';
-    syncToolbars();
+    applyKeyColors(map);
   });
   $('#kb-select-all').addEventListener('click', () => {
     LAYOUT.keyboard.forEach((k) => kbSelection.add(k.id));
     refreshSelection();
   });
   $('#kb-clear-sel').addEventListener('click', () => { kbSelection.clear(); refreshSelection(); });
-  $('#kb-reset').addEventListener('click', () => window.satella.led.clearKeys('keyboard'));
+  $('#kb-reset').addEventListener('click', () => {
+    kbPush();
+    window.satella.led.clearKeys('keyboard');
+    STATE.keyboard.colors = {};
+  });
+  $('#kb-undo').addEventListener('click', () => kbRestore(false));
+  $('#kb-redo').addEventListener('click', () => kbRestore(true));
+  $('#kb-preset').addEventListener('change', (e) => {
+    const kind = e.target.value;
+    e.target.value = '';
+    if (kind) applyKeyColors(presetColors(kind), { remember: false });
+  });
 
   // Calque : les touches sélectionnées gardent leur couleur par-dessus l'effet
   $('#kb-overlay-add').addEventListener('click', () => {
@@ -481,6 +601,8 @@ function buildToolbars() {
     const color = $('#kb-color').value;
     const map = {};
     for (const id of kbSelection) map[id] = color;
+    kbPush();
+    rememberColor(color);
     window.satella.led.setOverlay('keyboard', map);
     STATE.keyboard.overlay = { ...(STATE.keyboard.overlay || {}), ...map };
     refreshOverlayMarks();
@@ -489,6 +611,8 @@ function buildToolbars() {
   $('#kb-overlay-remove').addEventListener('click', () => {
     const overlay = { ...(STATE.keyboard.overlay || {}) };
     const ids = kbSelection.size ? [...kbSelection] : Object.keys(overlay);
+    if (!ids.length) return;
+    kbPush();
     window.satella.led.removeOverlay('keyboard', ids);
     for (const id of ids) delete overlay[id];
     STATE.keyboard.overlay = overlay;
@@ -541,8 +665,21 @@ function syncToolbars() {
   $('#mouse-speed-val').textContent = STATE.mouse.speed + '%';
   $('#kb-dir').value = STATE.keyboard.direction;
   const hint = EFFECT_HINTS[fx];
-  $('#kb-fx-hint').textContent = hint || '';
-  $('#kb-fx-hint').hidden = !hint;
+  const hintEl = $('#kb-fx-hint');
+  hintEl.textContent = hint || '';
+  hintEl.hidden = !hint;
+  if (fx === 'heatmap' && !SETTINGS.keyStats) {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.style.cssText = 'display:block;margin-top:8px';
+    b.textContent = 'Activer le comptage des frappes';
+    b.addEventListener('click', async () => {
+      renderSettings(await window.satella.settings.set({ keyStats: true }));
+      syncToolbars();
+      toast('Statistiques de frappe activées (Paramètres pour les remettre à zéro).');
+    });
+    hintEl.appendChild(b);
+  }
   refreshOverlayMarks();
   setAccent();
 }
@@ -815,6 +952,7 @@ const STEP_META = {
   loop: { icon: 'loop', name: 'Boucle' },
   runMacro: { icon: 'play', name: 'Exécuter macro' },
   open: { icon: 'open', name: 'Ouvrir' },
+  waitKey: { icon: 'keyDown', name: 'Attendre touche' },
 };
 
 // Cible d'une étape « Ouvrir » (même règle que le processus principal) :
@@ -853,6 +991,7 @@ function stepDesc(s) {
       return m ? m.name : '(macro supprimée)';
     }
     case 'open': return s.target || '';
+    case 'waitKey': return `Attendre ${keyLabel(s.key)}${s.timeoutMs ? ` (${s.timeoutMs / 1000} s max)` : ''}`;
     default: return s.type;
   }
 }
@@ -954,6 +1093,12 @@ function updateHistoryButtons() {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (currentPage === 'keyboard' && $('#modal-backdrop').hidden && !e.target.closest('input, textarea, select')) {
+    const key = e.key.toLowerCase();
+    if (e.ctrlKey && key === 'z' && !e.shiftKey) { e.preventDefault(); kbRestore(false); }
+    else if (e.ctrlKey && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); kbRestore(true); }
+    return;
+  }
   if (currentPage !== 'macros' || !currentMacro() || !$('#modal-backdrop').hidden) return;
   if (e.target.closest('input, textarea, select')) return;
   const k = e.key.toLowerCase();
@@ -1373,6 +1518,13 @@ function openStepModal(type, editPath = null, addPath = []) {
         <p class="muted" style="grid-column:1/3;font-size:11.5px">Un lien s'ouvre dans le navigateur, un programme se lance,
           un fichier s'ouvre avec son application habituelle.</p>`;
       break;
+    case 'waitKey':
+      fields = `<label>Touche attendue</label><select id="sf-key">${keyOptions}</select>
+        <label>Attente maximale (s)</label>
+        <input type="number" id="sf-timeout" min="0" max="600" step="0.5" value="${(+s.timeoutMs || 0) / 1000}">
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">La macro s'arrête là jusqu'à ce que tu appuies sur
+          cette touche (0 = sans limite) ; passé le délai, elle continue.</p>`;
+      break;
     case 'runMacro':
       fields = macroOptions
         ? `<label>Macro à exécuter</label><select id="sf-macro">${macroOptions}</select>`
@@ -1431,6 +1583,10 @@ function openStepModal(type, editPath = null, addPath = []) {
         if (!validOpenTarget(out.target)) {
           return toast('Indique un lien (https://…) ou le chemin complet d\'un programme ou fichier (C:\\…).', 4500);
         }
+        break;
+      case 'waitKey':
+        out.key = $('#sf-key').value;
+        out.timeoutMs = Math.max(0, Math.min(600000, Math.round((+$('#sf-timeout').value || 0) * 1000)));
         break;
       case 'runMacro':
         if (!$('#sf-macro')) { backdrop.hidden = true; return; }
@@ -1859,6 +2015,7 @@ async function renderProfiles(payload) {
     const res = await window.satella.profiles.load(name);
     if (res) {
       STATE = res.ledState;
+    resetKbHistory();
       replaceMacros(res.macros, `Profil « ${name} » chargé`);
       syncToolbars();
       renderProfiles(res);
@@ -1921,6 +2078,7 @@ $('#data-import').addEventListener('click', async () => {
     toast(`Profil « ${res.name} » importé.`);
   } else {
     STATE = res.ledState;
+    resetKbHistory();
     replaceMacros(res.macros, null);
     SNIPPETS = res.snippets;
     TURBOS = res.turbos;
@@ -2140,6 +2298,14 @@ function renderSettings(s) {
   $('#set-idle-val').textContent = s.idleMinutes + ' min';
   $('#set-offlock').checked = !!s.offOnLock;
   $('#set-flash').checked = !!s.flashOnMacro;
+  $('#set-keystats').checked = !!s.keyStats;
+  $('#set-night').checked = !!s.nightMode;
+  $('#set-night-from').value = s.nightFrom || '23:00';
+  $('#set-night-to').value = s.nightTo || '07:00';
+  $('#set-night-action').value = s.nightAction === 'dim' ? 'dim' : 'off';
+  $('#set-night-level').value = s.nightLevel || 30;
+  $('#set-night-level-val').textContent = (s.nightLevel || 30) + '%';
+  $('#set-night-level').disabled = s.nightAction !== 'dim';
   $('#set-autoupdate').checked = s.autoCheckUpdates;
   $('#set-autoinstall').checked = !!s.autoInstallUpdates;
   $('#set-autoinstall').disabled = !s.autoCheckUpdates;
@@ -2166,6 +2332,8 @@ const SETTING_SWITCHES = {
   '#set-flash': 'flashOnMacro',
   '#set-autoupdate': 'autoCheckUpdates',
   '#set-autoinstall': 'autoInstallUpdates',
+  '#set-keystats': 'keyStats',
+  '#set-night': 'nightMode',
 };
 for (const [sel, key] of Object.entries(SETTING_SWITCHES)) {
   $(sel).addEventListener('change', async (e) => {
@@ -2212,6 +2380,40 @@ async function syncStartupState() {
   }
 }
 
+// Mode nuit : plage horaire, action et niveau d'atténuation
+for (const [sel, key] of [['#set-night-from', 'nightFrom'], ['#set-night-to', 'nightTo'], ['#set-night-action', 'nightAction']]) {
+  $(sel).addEventListener('change', async (e) => {
+    if (!e.target.value) return;
+    renderSettings(await window.satella.settings.set({ [key]: e.target.value }));
+  });
+}
+$('#set-night-level').addEventListener('input', (e) => {
+  $('#set-night-level-val').textContent = e.target.value + '%';
+});
+$('#set-night-level').addEventListener('change', (e) => {
+  window.satella.settings.set({ nightLevel: +e.target.value });
+});
+
+// Statistiques de frappe : total, touches les plus utilisées, remise à zéro
+async function refreshStatsInfo() {
+  const st = await window.satella.stats.get();
+  const info = $('#set-stats-info');
+  if (!st || !st.total) {
+    info.textContent = 'Aucune frappe comptée pour l\'instant.';
+    return;
+  }
+  const top = Object.entries(st.counts).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, n]) => `${keyLabel(k)} (${n.toLocaleString('fr-FR')})`).join(', ');
+  const since = st.since ? ` depuis le ${new Date(st.since).toLocaleDateString('fr-FR')}` : '';
+  info.textContent = `${st.total.toLocaleString('fr-FR')} frappes comptées${since}. Les plus utilisées : ${top}.`;
+}
+$('#set-stats-reset').addEventListener('click', async () => {
+  if (!confirm('Remettre à zéro les statistiques de frappe ?')) return;
+  await window.satella.stats.reset();
+  refreshStatsInfo();
+  toast('Statistiques remises à zéro.');
+});
+
 async function refreshFootprint() {
   const st = await window.satella.memory.status();
   if (!st) return;
@@ -2249,6 +2451,7 @@ async function init() {
   buildMouse();
   buildToolbars();
   buildHomePreviews();
+  renderRecentColors();
   syncToolbars();
   renderMacroList();
   renderMacroEditor();
@@ -2303,6 +2506,7 @@ async function init() {
   window.satella.profiles.onChanged(onProfilesChanged);
   window.satella.profiles.onAutoApplied((res) => {
     STATE = res.ledState;
+    resetKbHistory();
     replaceMacros(res.macros, `Profil « ${res.name} » appliqué`);
     syncToolbars();
     onProfilesChanged(res);
