@@ -15,6 +15,7 @@ try {
 
 const APP = path.resolve(__dirname, '..', '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 function launch(dataDir) {
   return electron.launch({
@@ -261,6 +262,25 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('réglages hors profil mis de côté', backup && backup.ledState.keyboard.effect === 'fire');
     check('profil chargé actif', prof.active === 'Bureau perso');
 
+    // Profil programmé : appliqué automatiquement pendant sa plage horaire
+    const timedName = await page.getAttribute('.profile-row:not(.active)', 'data-name');
+    const timedRow = `.profile-row[data-name="${timedName}"]`;
+    await page.fill(`${timedRow} .p-sched-from`, hhmm(new Date(Date.now() - 3600e3)));
+    await page.fill(`${timedRow} .p-sched-to`, hhmm(new Date(Date.now() + 3600e3)));
+    await page.check(`${timedRow} .p-sched-on`);
+    await sleep(3800);
+    prof = await page.evaluate(() => window.satella.profiles.list());
+    const timed = prof.profiles.find((p) => p.name === timedName);
+    check('profil programmé appliqué pendant sa plage', prof.active === timedName && !!timed.schedule,
+      `${prof.active} / ${JSON.stringify(timed && timed.schedule)}`);
+    check('horaire affiché sur le profil', (await page.textContent(timedRow)).includes(timed.schedule.from));
+    await page.uncheck(`${timedRow} .p-sched-on`);
+    await sleep(300);
+    await page.click('.profile-row[data-name="Bureau perso"] .p-load');
+    await sleep(400);
+    prof = await page.evaluate(() => window.satella.profiles.list());
+    check('horaire retiré', prof.active === 'Bureau perso' && !prof.profiles.find((p) => p.name === timedName).schedule);
+
     // ---- Export / import (boîtes de dialogue simulées) ----
     const file = path.join(data, 'export-test.satella');
     await app.evaluate(({ dialog }, f) => {
@@ -293,6 +313,50 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#data-import');
     await sleep(600);
     check('restauration', (await page.textContent('#toast')).includes('restaurée'));
+
+    // ---- Palette de commandes (Ctrl+K) ----
+    await page.keyboard.press('Control+k');
+    await sleep(200);
+    check('palette ouverte', await page.isVisible('#palette-input'));
+    await page.fill('#palette-input', 'effet tourbi');
+    await sleep(100);
+    check('palette filtrée', (await page.locator('.pal-item').count()) === 1, await page.textContent('#palette-list'));
+    await page.keyboard.press('Enter');
+    await sleep(300);
+    check('palette : effet appliqué', !(await page.isVisible('#palette-backdrop'))
+      && (await page.getAttribute('#kb-effects button.active', 'data-fx')) === 'spiral');
+    await page.click('#palette-open');
+    await page.fill('#palette-input', 'charger bureau');
+    await page.keyboard.press('Enter');
+    await sleep(400);
+    check('palette : profil chargé', (await page.evaluate(() => window.satella.profiles.list())).active === 'Bureau perso');
+    // Rechargé juste après une retouche : la retouche est gardée, à l'écran comme dans le profil
+    check('profil rechargé juste après une retouche', (await page.getAttribute('#kb-effects button.active', 'data-fx')) === 'spiral'
+      && (await page.evaluate(async () => (await window.satella.init()).ledState.keyboard.effect)) === 'spiral');
+    await page.keyboard.press('Control+k');
+    await page.fill('#palette-input', 'zzz introuvable');
+    check('palette : aucun résultat', (await page.textContent('#palette-list')).includes('Aucun résultat'));
+    await page.keyboard.press('Escape');
+    check('palette fermée par Échap', !(await page.isVisible('#palette-backdrop')));
+
+    // ---- Glisser-déposer : superposition, fichiers refusés ----
+    const dropFile = async (name) => {
+      const dt = await page.evaluateHandle((n) => {
+        const d = new DataTransfer();
+        d.items.add(new File(['{}'], n));
+        return d;
+      }, name);
+      await page.dispatchEvent('body', 'dragenter', { dataTransfer: dt });
+      const shown = await page.isVisible('#drop-overlay');
+      await page.dispatchEvent('body', 'drop', { dataTransfer: dt });
+      await sleep(300);
+      return shown;
+    };
+    check('glisser-déposer : superposition affichée', await dropFile('notes.txt'));
+    check('glisser-déposer : fichier non .satella refusé', (await page.textContent('#toast')).includes('Seuls les fichiers')
+      && !(await page.isVisible('#drop-overlay')));
+    await dropFile('sans-chemin.satella');
+    check('glisser-déposer : fichier sans chemin refusé', (await page.textContent('#toast')).includes('Import impossible'));
 
     // ---- Minuteur (Accueil) : barre F1-F12 sur l'aperçu, arrêt ----
     await page.click('.nav-btn[data-page="home"]');

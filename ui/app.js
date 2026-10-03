@@ -210,8 +210,9 @@ $('#card-keyboard').addEventListener('click', () => showPage('keyboard'));
 $('#card-mouse').addEventListener('click', () => showPage('mouse'));
 
 /* ================= Mises à jour automatiques ================= */
-// Notes de version (Markdown simple : titres ##, listes -) en HTML échappé
+// Notes de version (Markdown simple : titres ##, listes -, `code`) en HTML échappé
 function renderNotes(md) {
+  const inline = (t) => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
   const out = [];
   let inList = false;
   for (const raw of String(md || '').split(/\r?\n/)) {
@@ -219,13 +220,13 @@ function renderNotes(md) {
     const item = /^[-*]\s+(.*)$/.exec(line);
     if (item) {
       if (!inList) { out.push('<ul>'); inList = true; }
-      out.push(`<li>${esc(item[1])}</li>`);
+      out.push(`<li>${inline(item[1])}</li>`);
       continue;
     }
     if (inList) { out.push('</ul>'); inList = false; }
     const title = /^#{1,6}\s+(.*)$/.exec(line);
     if (title) out.push(`<h4>${esc(title[1])}</h4>`);
-    else if (line) out.push(`<p>${esc(line)}</p>`);
+    else if (line) out.push(`<p>${inline(line)}</p>`);
   }
   if (inList) out.push('</ul>');
   return out.join('');
@@ -940,6 +941,10 @@ window.satella.capture.onStop((kind) => {
 });
 
 /* ================= Macros ================= */
+// Variables reconnues dans les étapes « Texte » et les abréviations
+const TEXT_VARS_HELP = 'Variables : {date}, {heure}, {jour}, {mois}, {annee}, {presse-papiers} (texte copié), '
+  + '{curseur} (le curseur s\'y place à la fin).';
+
 const STEP_META = {
   keyTap: { icon: 'key', name: 'Touche' },
   keyDown: { icon: 'keyDown', name: 'Appui touche' },
@@ -1486,7 +1491,8 @@ function openStepModal(type, editPath = null, addPath = []) {
     case 'text':
       fields = `<label>Texte à taper</label>
         <textarea id="sf-text" rows="4" style="width:100%">${esc(s.value || '')}</textarea>
-        <p class="muted" style="grid-column:1/3;font-size:11.5px">Les retours à la ligne deviennent des appuis sur Entrée, les tabulations des appuis sur Tab.</p>`;
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">Les retours à la ligne deviennent des appuis sur Entrée, les tabulations des appuis sur Tab.</p>
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">${TEXT_VARS_HELP}</p>`;
       break;
     case 'delay':
       fields = `<label>Durée (ms)</label><input type="number" id="sf-ms" min="1" max="600000" value="${+s.ms || 100}">`;
@@ -1988,7 +1994,8 @@ async function renderProfiles(payload) {
       <div class="p-main">
         <span class="p-name">${esc(pr.name)}
           ${pr.name === active ? '<span class="tag tag-target">Actif</span>' : ''}
-          ${pr.isDefault ? '<span class="tag tag-kb">Par défaut</span>' : ''}</span>
+          ${pr.isDefault ? '<span class="tag tag-kb">Par défaut</span>' : ''}
+          ${pr.schedule ? `<span class="tag tag-mouse" title="Profil programmé">${esc(pr.schedule.from)} – ${esc(pr.schedule.to)}</span>` : ''}</span>
         <span class="p-date" title="Dernière modification">${esc(fmtDate(pr.savedAt))}</span>
         <button class="btn small p-load">Charger</button>
         <button class="btn small p-default">${pr.isDefault ? 'Retirer le défaut' : 'Par défaut'}</button>
@@ -2000,6 +2007,13 @@ async function renderProfiles(payload) {
         <input type="text" class="p-apps-input" placeholder="Applications liées : jeu.exe, autre.exe"
           value="${esc((pr.apps || []).join(', '))}">
         <button class="btn small p-apps-save">Lier</button>
+      </div>
+      <div class="p-sched">
+        <label class="check"><input type="checkbox" class="p-sched-on" ${pr.schedule ? 'checked' : ''}> Actif chaque jour de</label>
+        <input type="time" class="p-sched-from" value="${esc(pr.schedule ? pr.schedule.from : '09:00')}">
+        <label class="muted">à</label>
+        <input type="time" class="p-sched-to" value="${esc(pr.schedule ? pr.schedule.to : '18:00')}">
+        <span class="muted p-sched-hint">(une application liée reste prioritaire)</span>
       </div>
     </div>`).join('') || '<p class="muted">Aucun profil sauvegardé.</p>';
 
@@ -2015,18 +2029,23 @@ async function renderProfiles(payload) {
     renderProfiles(await window.satella.profiles.setMeta(row.dataset.name, { apps }));
     toast('Applications liées au profil.');
   }));
-  $$('.p-load').forEach((b) => b.addEventListener('click', async (e) => {
-    const name = rowName(e);
-    const res = await window.satella.profiles.load(name);
-    if (res) {
-      STATE = res.ledState;
-    resetKbHistory();
-      replaceMacros(res.macros, `Profil « ${name} » chargé`);
-      syncToolbars();
-      renderProfiles(res);
-      toast(`Profil « ${name} » chargé.`);
+  // Profil programmé : plage horaire enregistrée à chaque modification
+  $$('.p-sched').forEach((box) => {
+    const save = async () => {
+      const row = box.closest('.profile-row');
+      const on = box.querySelector('.p-sched-on').checked;
+      const from = box.querySelector('.p-sched-from').value;
+      const to = box.querySelector('.p-sched-to').value;
+      if (on && (!from || !to || from === to)) return toast('Choisis une heure de début et une heure de fin différentes.');
+      renderProfiles(await window.satella.profiles.setMeta(row.dataset.name, { schedule: on ? { from, to } : null }));
+      toast(on ? `Profil programmé de ${from} à ${to}.` : 'Horaire retiré.');
+    };
+    box.querySelector('.p-sched-on').addEventListener('change', save);
+    for (const sel of ['.p-sched-from', '.p-sched-to']) {
+      box.querySelector(sel).addEventListener('change', () => { if (box.querySelector('.p-sched-on').checked) save(); });
     }
-  }));
+  });
+  $$('.p-load').forEach((b) => b.addEventListener('click', (e) => loadProfile(rowName(e))));
   $$('.p-rename').forEach((b) => b.addEventListener('click', async (e) => {
     const name = rowName(e);
     const next = await askText({ title: 'Renommer le profil', label: 'Nouveau nom', value: name, ok: 'Renommer' });
@@ -2045,6 +2064,17 @@ async function renderProfiles(payload) {
     if (!confirm(`Supprimer le profil « ${name} » ?`)) return;
     renderProfiles(await window.satella.profiles.remove(name));
   }));
+}
+
+async function loadProfile(name) {
+  const res = await window.satella.profiles.load(name);
+  if (!res) return;
+  STATE = res.ledState;
+  resetKbHistory();
+  replaceMacros(res.macros, `Profil « ${name} » chargé`);
+  syncToolbars();
+  renderProfiles(res);
+  toast(`Profil « ${name} » chargé.`);
 }
 
 // Mise à jour venue du processus principal : différée si l'utilisateur
@@ -2555,6 +2585,148 @@ async function refreshFootprint() {
       .filter(Boolean).join(', ') || 'aucun'}.`;
 }
 
+/* ================= Palette de commandes (Ctrl+K) ================= */
+const fold = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+let paletteAll = [];
+let paletteItems = [];
+let paletteSel = 0;
+
+async function paletteCommands() {
+  const items = [];
+  const add = (group, label, run, hint = '') => items.push({ group, label, run, hint, text: fold(`${group} ${label} ${hint}`) });
+  $$('.nav-btn').filter((b) => b.style.display !== 'none')
+    .forEach((b) => add('Page', `Aller à : ${b.textContent.trim()}`, () => showPage(b.dataset.page)));
+  if (SETTINGS.macrosEnabled) {
+    MACROS.forEach((m) => add('Macro', `Lancer « ${m.name} »`, () => playMacro(m), (m.trigger && m.trigger.accelerator) || ''));
+    add('Macro', 'Nouvelle macro', () => { showPage('macros'); $('#macro-new').click(); });
+  }
+  const { profiles } = await window.satella.profiles.list();
+  profiles.forEach((p) => add('Profil', `Charger « ${p.name} »`, () => loadProfile(p.name)));
+  if (SETTINGS.ledsEnabled) {
+    EFFECTS.forEach(([fx, label]) => add('Effet clavier', label, () => {
+      showPage('keyboard');
+      const btn = $(`#kb-effects button[data-fx="${fx}"]`);
+      if (btn) btn.click();
+    }));
+    add('Action', DIMMED ? 'Rallumer les LED' : 'Éteindre les LED', () => $('#leds-toggle').click());
+    add('Action', 'Luminosité +', () => window.satella.runAction('brightUp'));
+    add('Action', 'Luminosité −', () => window.satella.runAction('brightDown'));
+  }
+  add('Action', 'Profil suivant', () => window.satella.runAction('nextProfile'));
+  add('Action', 'Arrêter toutes les macros et turbos', () => window.satella.runAction('stopAll'));
+  [5, 15, 25, 45, 60].forEach((m) => add('Minuteur', `Minuteur ${m} min`, () => startTimer(m)));
+  if (TIMER.running || TIMER.done) add('Minuteur', 'Arrêter le minuteur', async () => onTimerState(await window.satella.timer.stop()));
+  add('Action', 'Sauvegarder maintenant', async () => {
+    const res = await window.satella.backups.now();
+    toast(res.ok ? 'Sauvegarde créée.' : 'Sauvegarde impossible (voir le journal).');
+  });
+  add('Action', 'Vérifier les mises à jour', () => { showPage('home'); $('#update-check').click(); });
+  add('Action', 'Copier le diagnostic', () => $('#diag-copy').click());
+  return items;
+}
+
+function renderPalette() {
+  const q = fold($('#palette-input').value).split(/\s+/).filter(Boolean);
+  paletteItems = paletteAll.filter((it) => q.every((w) => it.text.includes(w))).slice(0, 60);
+  paletteSel = Math.min(paletteSel, Math.max(0, paletteItems.length - 1));
+  const list = $('#palette-list');
+  list.innerHTML = paletteItems.map((it, i) => `
+    <div class="pal-item${i === paletteSel ? ' sel' : ''}" data-i="${i}" role="option" aria-selected="${i === paletteSel}">
+      <span class="pal-group">${esc(it.group)}</span>
+      <span class="pal-label">${esc(it.label)}</span>
+      ${it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}
+    </div>`).join('') || '<p class="muted pal-empty">Aucun résultat.</p>';
+  const sel = list.querySelector('.pal-item.sel');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+
+async function openPalette() {
+  if (!$('#modal-backdrop').hidden || !$('#palette-backdrop').hidden) return;
+  paletteAll = await paletteCommands();
+  paletteSel = 0;
+  $('#palette-input').value = '';
+  $('#palette-backdrop').hidden = false;
+  renderPalette();
+  $('#palette-input').focus();
+}
+
+function closePalette() {
+  $('#palette-backdrop').hidden = true;
+}
+
+function runPaletteItem(i) {
+  const it = paletteItems[i];
+  if (!it) return;
+  closePalette();
+  Promise.resolve().then(it.run).catch((err) => toast('Commande impossible : ' + err.message, 4000));
+}
+
+$('#palette-open').addEventListener('click', openPalette);
+$('#palette-input').addEventListener('input', () => { paletteSel = 0; renderPalette(); });
+$('#palette-input').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = paletteItems.length;
+    if (n) paletteSel = (paletteSel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderPalette();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    runPaletteItem(paletteSel);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePalette();
+  }
+});
+$('#palette-list').addEventListener('click', (e) => {
+  const item = e.target.closest('.pal-item');
+  if (item) runPaletteItem(+item.dataset.i);
+});
+$('#palette-list').addEventListener('mousemove', (e) => {
+  const item = e.target.closest('.pal-item');
+  if (!item || +item.dataset.i === paletteSel) return;
+  paletteSel = +item.dataset.i;
+  $$('#palette-list .pal-item').forEach((el, i) => el.classList.toggle('sel', i === paletteSel));
+});
+$('#palette-backdrop').addEventListener('mousedown', (e) => { if (e.target.id === 'palette-backdrop') closePalette(); });
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if ($('#palette-backdrop').hidden) openPalette();
+    else closePalette();
+  }
+});
+
+/* ================= Import par glisser-déposer ================= */
+// Seuls les fichiers venus de l'extérieur sont concernés (le réordonnancement
+// des étapes de macro utilise aussi le glisser-déposer)
+const isFileDrag = (e) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+let dragDepth = 0;
+document.addEventListener('dragenter', (e) => {
+  if (!isFileDrag(e)) return;
+  dragDepth++;
+  $('#drop-overlay').hidden = false;
+});
+document.addEventListener('dragleave', (e) => {
+  if (!isFileDrag(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) $('#drop-overlay').hidden = true;
+});
+document.addEventListener('dragover', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+document.addEventListener('drop', async (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  $('#drop-overlay').hidden = true;
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  if (!/\.(satella|json)$/i.test(file.name)) return toast('Seuls les fichiers .satella peuvent être importés.');
+  onImported(await window.satella.data.importFile(file));
+});
+
 /* ================= Initialisation ================= */
 async function init() {
   const data = await window.satella.init();
@@ -2652,11 +2824,9 @@ async function init() {
     syncToolbars();
     onProfilesChanged(res);
     if (res.manual) toast(`Profil « ${res.name} » chargé.`);
-    else {
-      toast(res.exe
-        ? `Profil « ${res.name} » appliqué pour ${res.exe}.`
-        : `Profil par défaut « ${res.name} » appliqué.`);
-    }
+    else if (res.exe) toast(`Profil « ${res.name} » appliqué pour ${res.exe}.`);
+    else if (res.schedule) toast(`Profil « ${res.name} » appliqué (horaire ${res.schedule.from} – ${res.schedule.to}).`);
+    else toast(`Profil par défaut « ${res.name} » appliqué.`);
   });
   window.satella.memory.onAuto((res) => {
     if (res && res.ok && res.freed > 0) {

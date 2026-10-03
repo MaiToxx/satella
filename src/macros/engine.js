@@ -4,6 +4,7 @@
 const { EventEmitter } = require('events');
 const input = require('./input');
 const { UIOHOOK_TO_NAME, toAccelerator } = require('./keys');
+const textvars = require('../shared/textvars');
 
 // Le module natif d'écoute globale n'est chargé qu'au premier besoin
 // (effet réactif, enregistrement, expansion de texte...)
@@ -32,11 +33,12 @@ const MAX_DEPTH = 16;
 class MacroEngine extends EventEmitter {
   // `injector` : module d'injection d'entrées (remplaçable pour les tests)
   // `opener` : ouvre un programme, un fichier ou un lien (étape « Ouvrir »)
-  constructor({ globalShortcut, injector = input, opener = null }) {
+  constructor({ globalShortcut, injector = input, opener = null, clipboardRead = () => '' }) {
     super();
     this.globalShortcut = globalShortcut;
     this.input = injector;
     this.opener = opener;
+    this.clipboardRead = clipboardRead; // variable {presse-papiers} des étapes « Texte »
     this.macros = [];
     this.playing = new Map(); // id -> {cancelled}
     this.recording = false;
@@ -215,7 +217,14 @@ class MacroEngine extends EventEmitter {
         case 'keyTap':
           await this.tap(ctx, step.key, step.modifiers || [], opts.holdMs);
           break;
-        case 'text': this.input.typeTextLines(step.value || ''); break;
+        case 'text': {
+          // Variables ({date}, {presse-papiers}...) ; {curseur} : flèche
+          // gauche jusqu'à l'endroit marqué
+          const { text, back } = textvars.expand(step.value || '', { clipboard: this.clipboardRead });
+          this.input.typeTextLines(text);
+          for (let i = 0; i < back && !ctx.cancelled; i++) this.input.keyTap('left');
+          break;
+        }
         case 'delay': await this.cancellableSleep(this.duration(step.ms || 0, opts), ctx); break;
         case 'mouseDown': this.pressButton(ctx, step.button || 'left'); break;
         case 'mouseUp': this.releaseButton(ctx, step.button || 'left'); break;

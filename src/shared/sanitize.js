@@ -166,6 +166,13 @@ function appName(v) {
   return /^[\w .()+-]{1,96}\.exe$/.test(s) ? s : null;
 }
 
+// Plage horaire d'un profil programmé ({ from, to } en HH:MM), ou null
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function schedule(v) {
+  if (!isObj(v) || !TIME_RE.test(v.from) || !TIME_RE.test(v.to) || v.from === v.to) return null;
+  return { from: v.from, to: v.to };
+}
+
 function profile(v, keyNames) {
   if (!isObj(v)) return null;
   const name = str(v.name, 60).trim();
@@ -178,6 +185,7 @@ function profile(v, keyNames) {
     macros: macros(v.macros, keyNames),
     apps: (Array.isArray(v.apps) ? v.apps : []).map(appName).filter(Boolean).slice(0, 50),
     isDefault: bool(v.isDefault),
+    schedule: schedule(v.schedule),
   };
 }
 
@@ -252,7 +260,7 @@ function settingsPatch(v) {
       if (isObj(v[k])) out[k] = appShortcuts(v[k]);
     }
     else if (k === 'nightFrom' || k === 'nightTo') {
-      if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v[k])) out[k] = v[k];
+      if (TIME_RE.test(v[k])) out[k] = v[k];
     } else if (k === 'nightAction') {
       if (v[k] === 'off' || v[k] === 'dim') out[k] = v[k];
     } else out[k] = v[k];
@@ -335,5 +343,5 @@ function stripOpenSteps(list) {
 
 module.exports = {
   parseImport, makeExport, ledState, macro, macros, profile, snippet, turbo, keymap, settingsPatch,
-  openTarget, openTargets, stripOpenSteps, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
+  openTarget, openTargets, stripOpenSteps, schedule, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
 };

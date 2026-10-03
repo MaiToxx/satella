@@ -109,3 +109,14 @@ test('les abréviations trop courtes ou désactivées sont ignorées', () => {
   const { e } = engineWith([{ abbr: 'a', text: 'X' }, { abbr: 'bb', text: 'Y', enabled: false }], azerty);
   assert.equal(e.active, false);
 });
+
+test('abréviation avec variables : presse-papiers et curseur', async () => {
+  const typer = fakeInput();
+  const e = new SnippetEngine({ translate: () => null, combineDead, typer, clipboardRead: () => 'lien' });
+  e.setSnippets([{ enabled: true, abbr: ';a', text: '<a href="{presse-papiers}">{curseur}</a>' }]);
+  e.feed('semicolon');
+  e.feed('a');
+  await wait(60);
+  assert.ok(typer.log.includes('lines "<a href=\\"lien\\"></a>"'), typer.log.join('|'));
+  assert.equal(typer.log.filter((l) => l === 'tap left').length, 4);
+});

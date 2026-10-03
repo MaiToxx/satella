@@ -394,6 +394,8 @@ details > summary:hover { color: var(--text); }
 .profile-row .p-name { flex: 1; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .profile-row .p-apps { display: flex; gap: 8px; margin-top: 8px; }
 .profile-row .p-apps-input { flex: 1; max-width: 420px; font-family: var(--font-mono); font-size: 12px; }
+.profile-row .p-sched { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.profile-row .p-sched-hint { font-size: 11.5px; }
 .profile-row .p-date { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 
 /* ======================= Expansion de texte et turbo ====================== */
@@ -572,3 +574,42 @@ details > summary:hover { color: var(--text); }
 .app-sc-row:last-child { border-bottom: none; }
 .app-sc-row .sc-name { flex: 1; min-width: 200px; }
 .app-sc-row .trigger-input { min-width: 170px; }
+
+code { font-family: var(--font-mono); font-size: .92em; background: var(--well); padding: 1px 5px; border-radius: 4px; }
+
+/* ========================= Palette de commandes ========================== */
+.palette-open {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 24px); margin: 0 12px 12px;
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line2); background: var(--well);
+  color: var(--faint); font-size: 12.5px; cursor: pointer; text-align: left;
+}
+.palette-open:hover { border-color: var(--faint); color: var(--text); }
+.palette-open kbd { margin-left: auto; }
+kbd {
+  font-family: var(--font-mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line2); color: var(--faint); white-space: nowrap;
+}
+#palette-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 60;
+  display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh;
+}
+#palette { width: 560px; max-width: calc(100vw - 32px); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+#palette-input { width: 100%; font-size: 14px; padding: 10px 12px; }
+#palette-list { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.pal-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.pal-item.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.pal-group { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); min-width: 92px; }
+.pal-label { flex: 1; }
+.pal-empty { padding: 8px 10px; }
+.palette-foot { font-size: 11px; color: var(--faint); padding: 2px 4px; }
+
+/* Import par glisser-déposer */
+#drop-overlay {
+  position: fixed; inset: 0; z-index: 70; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 12%, rgba(0,0,0,.6));
+  display: grid; place-items: center;
+}
+#drop-overlay > div {
+  border: 2px dashed var(--accent); border-radius: 14px; padding: 28px 36px;
+  font-size: 15px; font-weight: 600; color: var(--text); background: var(--deck);
+}
