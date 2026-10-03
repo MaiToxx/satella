@@ -4,7 +4,7 @@
 
 const {
   app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, nativeImage,
-  powerMonitor, dialog, shell, clipboard, screen, session, desktopCapturer,
+  powerMonitor, dialog, shell, clipboard, screen, session, desktopCapturer, Notification,
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
@@ -13,17 +13,19 @@ const { autoUpdater } = require('electron-updater');
 // bump de version, puis `npx electron-builder --win --publish always`.
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Store } = require('./src/store');
 const logger = require('./src/system/logger');
-const { LedEngine, DEFAULT_DEVICE_STATE } = require('./src/led/engine');
+const { LedEngine, DEFAULT_DEVICE_STATE, hexToRgb, TIMER_DONE_MS } = require('./src/led/engine');
 const { DirectBackend } = require('./src/led/direct');
 const hid = require('./src/led/hid');
 const memory = require('./src/system/memory');
 const foreground = require('./src/system/foreground');
 const idle = require('./src/system/idle');
+const locks = require('./src/system/locks');
 const { MacroEngine, hookAvailable } = require('./src/macros/engine');
 const { SnippetEngine } = require('./src/macros/snippets');
 const input = require('./src/macros/input');
@@ -62,6 +64,11 @@ let fgTimer = null;
 let idleTimer = null;
 let nightTimer = null;
 let nightDim = null;            // facteur d'atténuation du mode nuit, ou null
+let nightOverride = false;      // LED rallumées à la main pendant la plage du mode nuit
+let lockTimer = null;           // témoins Verr. Maj / Verr. Num
+let liveLayers = false;         // calques temporaires affichés (flux temps réel)
+let timer = null;               // minuteur { t0, ms, minutes, done, endTimer, clearTimer }
+let backupTimer = null;
 let keyStats = { counts: {}, total: 0, since: null };
 let sysmonTimer = null;
 let lastCpu = null;
@@ -109,6 +116,11 @@ const DEFAULT_SETTINGS = {
   nightTo: '07:00',
   nightAction: 'off',       // 'off' (éteindre) | 'dim' (atténuer)
   nightLevel: 30,           // % de luminosité en mode « atténuer »
+  lockIndicators: false,    // témoins Verr. Maj / Verr. Num sur le clavier
+  lockColor: '#ffffff',
+  timerMinutes: 25,         // durée du minuteur (dernière utilisée)
+  autoBackup: true,         // sauvegarde automatique quotidienne des données
+  appShortcuts: {},         // raccourcis globaux de l'application : action -> accélérateur
 };
 
 // Démarrage silencieux : Windows relance Satella avec ce drapeau
@@ -388,7 +400,7 @@ function setupEngines() {
 }
 
 const streamingKeyboard = () => settings.ledsEnabled && !isDimmed() && !!direct.kb
-  && direct.isStreamed(ledEngine.state.keyboard);
+  && direct.isStreamed(hwState('keyboard'));
 
 // Active ou coupe les modules selon les paramètres, à chaud.
 function applySettings() {
@@ -455,6 +467,26 @@ function applySettings() {
   }
   nightTick();
 
+  // --- Témoins Verr. Maj / Verr. Num ---
+  clearInterval(lockTimer);
+  lockTimer = null;
+  if (settings.lockIndicators && settings.ledsEnabled && locks.available()) {
+    lockTimer = setInterval(lockTick, 250);
+    lockTick();
+  } else {
+    ledEngine.setIndicators({});
+    refreshLiveLayers();
+  }
+
+  // --- Sauvegarde automatique (au plus une par jour, données modifiées) ---
+  if (settings.autoBackup && !backupTimer) {
+    backupTimer = setInterval(() => autoBackup(), 3 * 3600 * 1000);
+    setTimeout(() => { if (settings.autoBackup) autoBackup(); }, 20000);
+  } else if (!settings.autoBackup) {
+    clearInterval(backupTimer);
+    backupTimer = null;
+  }
+
   updateHookNeed();
   updateSysmon();
   updateCapture();
@@ -518,10 +550,82 @@ function refreshShortcuts() {
     globalShortcut.unregisterAll();
     snippetEngine.setSnippets([]);
   }
+  registerAppShortcuts();
   if (shortcutErrors.length) {
     console.log('[raccourcis] refusés :', shortcutErrors.map((e) => `${e.accelerator} (${e.reason})`).join(', '));
   }
   send('shortcuts:errors', shortcutErrors);
+}
+
+// Raccourcis de l'application (Paramètres) : actifs même macros coupées.
+// Enregistrés après ceux des macros et turbos, qui gardent la priorité.
+const APP_ACTIONS = {
+  leds: { label: 'allumer / éteindre les LED', run: () => setLedsOff(!isDimmed()) },
+  nextProfile: { label: 'profil suivant', run: () => cycleProfile() },
+  brightUp: { label: 'luminosité +', run: () => stepBrightness(1) },
+  brightDown: { label: 'luminosité −', run: () => stepBrightness(-1) },
+  stopAll: { label: 'tout arrêter', run: () => { macroEngine.stop(); stopAllTurbos(); } },
+  timer: { label: 'minuteur', run: () => (timer ? stopTimer() : startTimer(settings.timerMinutes)) },
+};
+
+function registerAppShortcuts() {
+  const taken = new Map();
+  if (settings.macrosEnabled) {
+    for (const m of macros) {
+      if (m.enabled && m.trigger && m.trigger.accelerator) taken.set(normAccel(m.trigger.accelerator), `macro « ${m.name} »`);
+    }
+    turbos.forEach((t, i) => {
+      if (t.enabled && t.accelerator) taken.set(normAccel(t.accelerator), `turbo n°${i + 1}`);
+    });
+  }
+  const shortcuts = settings.appShortcuts || {};
+  for (const [action, def] of Object.entries(APP_ACTIONS)) {
+    const accel = shortcuts[action];
+    if (!accel) continue;
+    const k = normAccel(accel);
+    const owner = taken.get(k);
+    if (owner) {
+      shortcutErrors.push({ kind: 'app', id: action, accelerator: accel, reason: `déjà utilisé par la ${owner}` });
+      continue;
+    }
+    taken.set(k, `commande « ${def.label} »`);
+    let ok = false;
+    try {
+      ok = globalShortcut.register(accel, () => {
+        try { def.run(); } catch (err) { console.log('[raccourci]', action, err.message); }
+      });
+    } catch { /* accélérateur invalide */ }
+    if (!ok) {
+      shortcutErrors.push({
+        kind: 'app', id: action, accelerator: accel,
+        reason: 'refusé par Windows (déjà pris par une autre application ?)',
+      });
+    }
+  }
+}
+
+// Profil suivant (ordre de la page Profils), appliqué comme un choix manuel
+function cycleProfile() {
+  const profiles = store.read('profiles', []).filter((p) => p.name !== UNSAVED_PROFILE);
+  if (!profiles.length) return;
+  const i = profiles.findIndex((p) => p.name === sessionState.activeProfile);
+  const next = profiles[(i + 1) % profiles.length];
+  const res = loadProfileByName(next.name);
+  if (res) send('profiles:autoApplied', { name: next.name, exe: null, manual: true, ...res });
+}
+
+// Luminosité par paliers (le clavier n'en a que 4 en mode natif) ; jamais
+// jusqu'à l'extinction
+const BRIGHT_STEPS = [25, 50, 75, 100];
+function stepBrightness(dir) {
+  for (const device of ['keyboard', 'mouse']) {
+    const cur = ledEngine.state[device].brightness;
+    const next = dir > 0
+      ? (BRIGHT_STEPS.find((v) => v > cur) || 100)
+      : ([...BRIGHT_STEPS].reverse().find((v) => v < cur) || 25);
+    if (next !== cur) ledEngine.setDeviceState(device, { brightness: next });
+  }
+  send('led:state', ledEngine.state);
 }
 
 // Mode turbo : le raccourci démarre ou coupe la répétition automatique.
@@ -596,16 +700,48 @@ function applyLeds({ force = false } = {}) {
   direct.applyMouse(hwState('mouse'));
 }
 
-// État envoyé au matériel : luminosité réduite en mode nuit « atténuer »
+// État envoyé au matériel : luminosité réduite en mode nuit « atténuer »,
+// flux temps réel tant que des calques temporaires sont affichés
 function hwState(device) {
   const st = ledEngine.state[device];
-  return nightDim ? { ...st, brightness: Math.round(st.brightness * nightDim) } : st;
+  const out = nightDim ? { ...st, brightness: Math.round(st.brightness * nightDim) } : st;
+  return device === 'keyboard' && ledEngine.hasLiveLayers() ? { ...out, live: true } : out;
+}
+
+// Calques temporaires (témoins, minuteur) apparus ou disparus : le clavier
+// passe au flux temps réel ou revient à sa configuration enregistrée
+function refreshLiveLayers() {
+  const live = ledEngine.hasLiveLayers();
+  if (live === liveLayers) return;
+  liveLayers = live;
+  if (settings.ledsEnabled && !isDimmed()) direct.applyKeyboard(hwState('keyboard'));
+}
+
+// Témoins Verr. Maj / Verr. Num : touche allumée tant que le verrou est actif
+function lockTick() {
+  ledEngine.setIndicators(locks.indicatorMap(locks.read(), hexToRgb(settings.lockColor)));
+  refreshLiveLayers();
+}
+
+// Extinction manuelle, ou rallumage (y compris pendant la plage du mode
+// nuit, jusqu'à sa fin)
+function setLedsOff(off) {
+  if (off) {
+    setDim('manual', true);
+  } else {
+    if (dimReasons.has('night')) nightOverride = true;
+    setDim('night', false);
+    setDim('manual', false);
+  }
+  return isDimmed();
 }
 
 // Mode nuit : extinction (raison « night ») ou atténuation pendant la plage
 function nightTick() {
-  const active = !!(settings.nightMode && settings.ledsEnabled
+  const inWindow = !!(settings.nightMode && settings.ledsEnabled
     && inTimeWindow(settings.nightFrom, settings.nightTo));
+  if (!inWindow) nightOverride = false;
+  const active = inWindow && !nightOverride;
   const dim = active && settings.nightAction === 'dim'
     ? Math.max(0.05, Math.min(1, (settings.nightLevel || 30) / 100)) : null;
   setDim('night', active && settings.nightAction !== 'dim');
@@ -644,7 +780,60 @@ function setDim(reason, on) {
 function flashKeyboard(rgb) {
   if (quitting || !settings.ledsEnabled || isDimmed()) return;
   ledEngine.flash(rgb);
-  if (!direct.isStreamed(ledEngine.state.keyboard)) direct.kbFlash(rgb);
+  if (!direct.isStreamed(hwState('keyboard'))) direct.kbFlash(rgb);
+}
+
+// ------------------------------------------------------------- Minuteur --
+// Barre de progression sur F1-F12, puis clignotement et notification
+
+function timerPayload() {
+  return timer
+    ? { running: !timer.done, done: !!timer.done, t0: timer.t0, ms: timer.ms, minutes: timer.minutes }
+    : { running: false, done: false };
+}
+
+function notify(title, body) {
+  try {
+    if (Notification.isSupported()) new Notification({ title, body, icon: path.join(__dirname, 'build', 'icon.png') }).show();
+  } catch { /* notifications indisponibles */ }
+}
+
+function startTimer(minutes) {
+  stopTimer({ silent: true });
+  const m = Math.max(1, Math.min(180, Math.round(Number(minutes) || settings.timerMinutes || 25)));
+  timer = { t0: Date.now(), ms: m * 60000, minutes: m, done: false };
+  timer.endTimer = setTimeout(timerFinished, timer.ms);
+  ledEngine.setTimer({ t0: timer.t0, ms: timer.ms });
+  refreshLiveLayers();
+  if (settings.timerMinutes !== m) {
+    settings = { ...settings, timerMinutes: m };
+    store.write('settings', settings);
+  }
+  rebuildTrayMenu();
+  send('timer:state', timerPayload());
+  return timerPayload();
+}
+
+function timerFinished() {
+  if (!timer) return;
+  timer.done = true;
+  notify('Minuteur terminé', `${timer.minutes} min écoulée${timer.minutes > 1 ? 's' : ''}.`);
+  send('timer:state', timerPayload());
+  timer.clearTimer = setTimeout(() => stopTimer(), TIMER_DONE_MS + 200);
+}
+
+function stopTimer({ silent = false } = {}) {
+  if (!timer) return timerPayload();
+  clearTimeout(timer.endTimer);
+  clearTimeout(timer.clearTimer);
+  timer = null;
+  ledEngine.setTimer(null);
+  refreshLiveLayers();
+  if (!silent) {
+    rebuildTrayMenu();
+    send('timer:state', timerPayload());
+  }
+  return timerPayload();
 }
 
 // Jauge système : échantillonnage processeur / mémoire chaque seconde,
@@ -949,6 +1138,53 @@ function backupData() {
   };
 }
 
+// Sauvegardes automatiques : satella-data/sauvegardes/sauvegarde-AAAA-MM-JJ-HHhMM.satella,
+// les 10 plus récentes sont gardées
+const BACKUP_RE = /^sauvegarde-(\d{4})-(\d{2})-(\d{2})-(\d{2})h(\d{2})\.satella$/;
+const BACKUP_KEEP = 10;
+const backupDir = () => path.join(app.getPath('userData'), 'satella-data', 'sauvegardes');
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function listBackups() {
+  let names = [];
+  try { names = fs.readdirSync(backupDir()).filter((n) => BACKUP_RE.test(n)); } catch { /* aucun dossier */ }
+  return names.sort().reverse().map((name) => {
+    const [, y, mo, d, h, mi] = BACKUP_RE.exec(name);
+    let size = 0;
+    try { size = fs.statSync(path.join(backupDir(), name)).size; } catch { /* supprimé entre-temps */ }
+    return { name, date: `${y}-${mo}-${d}T${h}:${mi}`, size };
+  });
+}
+
+// `force` : sauvegarde immédiate (bouton) ; sinon au plus une par jour, et
+// seulement si les données ont changé depuis la précédente
+function autoBackup({ force = false } = {}) {
+  const data = backupData();
+  const sig = crypto.createHash('sha1').update(JSON.stringify(data)).digest('hex');
+  const meta = store.read('app-meta', {});
+  const now = new Date();
+  const day = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  const existing = listBackups();
+  if (!force) {
+    if (existing.some((b) => b.date.startsWith(day))) return null;
+    if (meta.lastBackupSig === sig && existing.length) return null;
+  }
+  try {
+    fs.mkdirSync(backupDir(), { recursive: true });
+    const name = `sauvegarde-${day}-${pad2(now.getHours())}h${pad2(now.getMinutes())}.satella`;
+    fs.writeFileSync(path.join(backupDir(), name), sanitize.makeExport('backup', data, app.getVersion()), 'utf8');
+    store.write('app-meta', { ...meta, lastBackupSig: sig });
+    for (const old of listBackups().slice(BACKUP_KEEP)) {
+      try { fs.unlinkSync(path.join(backupDir(), old.name)); } catch { /* déjà supprimé */ }
+    }
+    console.log('[sauvegarde] créée :', name);
+    return name;
+  } catch (err) {
+    console.log('[sauvegarde] impossible :', err.message);
+    return null;
+  }
+}
+
 function safeFileName(name) {
   return String(name).replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'profil';
 }
@@ -999,27 +1235,34 @@ function uniqueProfileName(profiles, name) {
   }
 }
 
-async function importData() {
-  const res = await dialog.showOpenDialog(win, {
-    title: 'Importer un fichier Satella',
-    properties: ['openFile'],
-    filters: [{ name: 'Fichier Satella', extensions: ['satella', 'json'] }],
-  });
-  if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+// `file` : fichier imposé (sauvegarde automatique, déjà de confiance) ;
+// sinon l'utilisateur choisit le fichier
+async function importData(file = null) {
+  const trusted = !!file;
+  if (!file) {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Importer un fichier Satella',
+      properties: ['openFile'],
+      filters: [{ name: 'Fichier Satella', extensions: ['satella', 'json'] }],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    file = res.filePaths[0];
+  }
   let parsed;
   try {
-    const stat = fs.statSync(res.filePaths[0]);
+    const stat = fs.statSync(file);
     if (stat.size > 20 * 1024 * 1024) throw new Error('fichier trop volumineux');
-    parsed = sanitize.parseImport(fs.readFileSync(res.filePaths[0], 'utf8'), KEY_NAMES);
+    parsed = sanitize.parseImport(fs.readFileSync(file, 'utf8'), KEY_NAMES);
   } catch (err) {
     return { ok: false, error: err.message };
   }
 
   // Étapes « Ouvrir » (programmes, liens) : jamais importées sans accord
+  // (sauf depuis les sauvegardes automatiques de Satella elle-même)
   const imported = parsed.kind === 'profile'
     ? [parsed.profile]
     : [{ macros: parsed.data.macros }, ...parsed.data.profiles];
-  const targets = [...new Set(imported.flatMap((x) => sanitize.openTargets(x.macros)))];
+  const targets = trusted ? [] : [...new Set(imported.flatMap((x) => sanitize.openTargets(x.macros)))];
   if (targets.length) {
     const ans = await dialog.showMessageBox(win, {
       type: 'warning',
@@ -1192,6 +1435,8 @@ function setupIpc() {
       uiohook: hookAvailable(),
     },
     whatsNew,
+    timer: timerPayload(),
+    locksAvailable: locks.available(),
     keyNames: KEY_NAMES,
     keyLabels: Object.fromEntries(KEY_NAMES.map((k) => [k, keys.labelFor(k)])),
   }));
@@ -1216,7 +1461,7 @@ function setupIpc() {
   ipcMain.handle('led:clearKeys', (e, device) => ledEngine.clearKeys(device));
   ipcMain.handle('led:setOverlay', (e, device, colors) => ledEngine.setOverlay(device, colors));
   ipcMain.handle('led:removeOverlay', (e, device, ids) => ledEngine.removeOverlay(device, ids));
-  ipcMain.handle('leds:setManualOff', (e, on) => { setDim('manual', !!on); return isDimmed(); });
+  ipcMain.handle('leds:setManualOff', (e, on) => setLedsOff(!!on));
   ipcMain.on('audio:bands', (e, bands) => ledEngine.setAudioBands(bands));
   ipcMain.on('screen:grid', (e, grid) => ledEngine.setScreenGrid(grid));
   ipcMain.on('capture:error', (e, kind, message) => console.log(`[capture ${kind}]`, message));
@@ -1336,6 +1581,28 @@ function setupIpc() {
     store.write('key-stats', keyStats);
     ledEngine.renderOnce();
     return keyStats;
+  });
+
+  // ---- Minuteur ----
+  ipcMain.handle('timer:get', () => timerPayload());
+  ipcMain.handle('timer:start', (e, minutes) => startTimer(minutes));
+  ipcMain.handle('timer:stop', () => stopTimer());
+
+  // ---- Sauvegardes automatiques ----
+  ipcMain.handle('backups:list', () => listBackups());
+  ipcMain.handle('backups:now', () => {
+    const name = autoBackup({ force: true });
+    return { ok: !!name, name, list: listBackups() };
+  });
+  ipcMain.handle('backups:openFolder', () => {
+    fs.mkdirSync(backupDir(), { recursive: true });
+    return shell.openPath(backupDir());
+  });
+  ipcMain.handle('backups:restore', (e, name) => {
+    if (!BACKUP_RE.test(String(name)) || !listBackups().some((b) => b.name === name)) {
+      return { ok: false, error: 'sauvegarde introuvable' };
+    }
+    return importData(path.join(backupDir(), name));
   });
 
   // ---- Optimiseur mémoire ----
@@ -1476,6 +1743,14 @@ function rebuildTrayMenu() {
       click: (item) => setDim('manual', item.checked),
     },
     {
+      label: timer && !timer.done ? `Minuteur (${timer.minutes} min, en cours)` : 'Minuteur',
+      submenu: [
+        ...[5, 15, 25, 45, 60].map((m) => ({ label: `${m} min`, click: () => startTimer(m) })),
+        { type: 'separator' },
+        { label: 'Arrêter', enabled: !!timer, click: () => stopTimer() },
+      ],
+    },
+    {
       label: 'Macros actives',
       type: 'checkbox',
       checked: settings.macrosEnabled,
@@ -1511,6 +1786,9 @@ app.on('second-instance', () => revealWindow());
 
 app.whenReady().then(() => {
   if (!gotLock) return;
+  // Notifications Windows (fin du minuteur) : même identifiant que le
+  // raccourci créé par l'installeur
+  if (process.platform === 'win32') app.setAppUserModelId('com.satella.rgb');
   // Un échec au démarrage ne doit pas laisser un processus invisible qui
   // garderait le verrou d'instance unique (plus aucun lancement possible)
   try {
@@ -1539,6 +1817,7 @@ app.on('before-quit', () => { quitting = true; });
 app.on('will-quit', () => {
   if (!gotLock || !store) return;
   stopAllTurbos();
+  stopTimer({ silent: true });
   globalShortcut.unregisterAll();
   if (profileSyncTimer) syncActiveProfile();
   store.flush();

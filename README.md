@@ -66,7 +66,13 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 - **Extinction** : bouton dans la barre latérale ou la zone de notification,
   automatique après inactivité, ou au verrouillage de la session (Windows + L).
 - **Mode nuit** : sur une plage horaire (ex. 23:00 – 07:00), les LED
-  s'éteignent ou baissent à la luminosité choisie, puis reviennent seules.
+  s'éteignent ou baissent à la luminosité choisie, puis reviennent seules
+  (« rallumer » l'emporte jusqu'à la fin de la plage).
+- **Témoins Verr. Maj / Verr. Num** : la touche s'allume tant que le
+  verrouillage est actif, par-dessus n'importe quel effet (le GS98 n'a pas
+  de voyants).
+- **Minuteur** (Accueil ou zone de notification) : la rangée F1–F12 se vide
+  du vert au rouge, puis le clavier clignote et une notification s'affiche.
 - **Calibration** : la carte touche/LED du GS98 est calibrée d'usine dans
   l'app ; le bouton « Calibrer la carte des touches » (page Clavier) permet
   de la refaire sur un autre exemplaire (une touche s'allume, on la presse).
@@ -123,6 +129,13 @@ sont gardées qu'avec ton accord.
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
   extinction des LED, activation des macros et installation d'une mise à jour
   prête.
+- **Raccourcis de l'application** (Paramètres) : éteindre / rallumer les LED,
+  profil suivant, luminosité + / −, tout arrêter, minuteur ; actifs dans
+  toutes les applications, même macros coupées. Les conflits avec une macro
+  ou un turbo sont signalés.
+- **Sauvegardes automatiques** : chaque jour où quelque chose a changé,
+  copie complète dans `satella-data/sauvegardes/` (10 dernières gardées),
+  restaurable depuis les Paramètres.
 - **Statistiques de frappe** (option) : nombre d'appuis par touche, gardé sur
   ce PC et remis à zéro en un clic ; les frappes des macros et turbos ne
   comptent pas.
@@ -158,7 +171,9 @@ réglages en cours. La barre latérale indique l'état de chaque périphérique.
 changement réel (jamais deux fois le même état). Les animations calculées par
 Satella passent, elles, par le mode « dynamique » du clavier (commande 0x12),
 qui n'écrit rien en flash ; un thread dédié n'envoie que les blocs modifiés et
-entretient le mode toutes les 300 ms.
+entretient le mode toutes les 300 ms. Les affichages passagers (témoins,
+minuteur) empruntent ce même flux ; à leur disparition, une simple sortie du
+mode dynamique rend au clavier l'effet déjà enregistré, sans réécriture.
 
 ## Notes
 
@@ -168,7 +183,8 @@ entretient le mode toutes les 300 ms.
   fonctions sert — uniquement locale, rien n'est envoyé sur le réseau.
 - Les données (macros, profils, éclairage) sont stockées dans
   `%APPDATA%/satella-rgb/satella-data/` (avec une copie `.bak` de la version
-  précédente de chaque fichier), les journaux dans `%APPDATA%/satella-rgb/logs/`.
+  précédente de chaque fichier, et les sauvegardes automatiques dans
+  `sauvegardes/`), les journaux dans `%APPDATA%/satella-rgb/logs/`.
 
 ## Architecture
 
@@ -190,6 +206,7 @@ src/system/keyboard-layout.js Caractères selon la disposition active
 src/system/foreground.js      Application au premier plan (profils)
 src/system/idle.js            Inactivité (extinction automatique)
 src/system/schedule.js        Plages horaires (mode nuit)
+src/system/locks.js           État Verr. Maj / Verr. Num (témoins)
 src/system/memory.js          Optimiseur mémoire
 src/system/logger.js          Journal fichier
 ui/                           Interface (HTML/CSS/JS)

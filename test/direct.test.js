@@ -93,3 +93,32 @@ test('une écriture ratée est retentée à la reconnexion', async () => {
   await wait(300);
   assert.ok(d.kb.packets.length > 0);
 });
+
+test('calque temporaire : flux temps réel, puis retour sans réécrire la flash', async () => {
+  const d = new DirectBackend();
+  d.kb = fakeKeyboard();
+  d.kbMapSize = 128;
+  const state = { effect: 'breathing', baseColor: '#00ff00', speed: 50, brightness: 100,
+    direction: 'lr', colors: {}, overlay: {} };
+  assert.equal(isStreamed({ ...state, live: true }), true);
+  d.applyKeyboard(state);
+  await wait(300);
+  const configWrites = () => d.kb.packets.filter((p) => p[3] === 0x06).length;
+  const written = configWrites();
+  assert.ok(written > 0, 'configuration écrite une première fois');
+  // Témoin allumé : passage au flux, aucune écriture de configuration
+  d.applyKeyboard({ ...state, live: true });
+  await wait(300);
+  assert.equal(d.kbStreaming, true);
+  assert.equal(configWrites(), written);
+  // Témoin éteint : simple sortie du mode dynamique
+  d.applyKeyboard(state);
+  await wait(300);
+  assert.equal(d.kbStreaming, false);
+  assert.equal(configWrites(), written, 'flash non réécrite');
+  assert.ok(d.kb.packets.some((p) => p[3] === 0x13), 'sortie du mode dynamique');
+  // Un autre réglage, lui, est bien écrit
+  d.applyKeyboard({ ...state, baseColor: '#ff0000' });
+  await wait(300);
+  assert.ok(configWrites() > written);
+});

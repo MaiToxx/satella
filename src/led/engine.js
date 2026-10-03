@@ -92,6 +92,11 @@ const DEFAULT_DEVICE_STATE = () => ({
 const SYSMON_CPU_KEYS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
 const SYSMON_RAM_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'minus', 'equal'];
 
+// Minuteur : barre de progression sur la rangée F1-F12, puis clignotement
+// de tout le clavier une fois le temps écoulé
+const TIMER_KEYS = SYSMON_CPU_KEYS;
+const TIMER_DONE_MS = 3000;
+
 class LedEngine extends EventEmitter {
   constructor() {
     super();
@@ -110,6 +115,8 @@ class LedEngine extends EventEmitter {
     this.flashState = null;        // { rgb, t0, ms }
     this.heat = {};                // carte de chaleur : touche -> nombre de frappes
     this.dimFactor = 1;            // atténuation globale (mode nuit), 0..1
+    this.indicators = {};          // calque temporaire : touche -> [r, g, b] (témoins Verr.)
+    this.timerState = null;        // minuteur { t0, ms }
     this.keyIndex = new Map(layout.keyboard.map((k) => [k.id, k]));
     // Consommateurs d'images : sans aperçu visible ni flux vers le
     // clavier, inutile de calculer 30 images/s (remplacé par main.js)
@@ -171,6 +178,27 @@ class LedEngine extends EventEmitter {
     const v = Number(f);
     this.dimFactor = Number.isFinite(v) ? clamp01(v) : 1;
     this.renderOnce();
+  }
+
+  // Témoins (Verr. Maj, Verr. Num...) : touches allumées par-dessus tout,
+  // sans toucher à l'état enregistré
+  setIndicators(map) {
+    const next = map && typeof map === 'object' ? map : {};
+    if (JSON.stringify(next) === JSON.stringify(this.indicators)) return;
+    this.indicators = next;
+    this.renderOnce();
+  }
+
+  // Minuteur visuel : { ms, t0? } pour démarrer, null pour arrêter
+  setTimer(timer) {
+    this.timerState = timer && timer.ms > 0 ? { t0: timer.t0 || Date.now(), ms: timer.ms } : null;
+    this.renderOnce();
+  }
+
+  // Des calques temporaires sont affichés : le clavier doit passer par le
+  // flux temps réel (pas d'écriture en flash pour un affichage passager)
+  hasLiveLayers() {
+    return !!this.timerState || Object.keys(this.indicators).length > 0;
   }
 
   // Flash bref de tout le clavier (retour visuel des macros)
@@ -247,7 +275,7 @@ class LedEngine extends EventEmitter {
     const dt = this._lastTick ? Math.min(0.1, (now - this._lastTick) / 1000) : 1 / FPS;
     this._lastTick = now;
     this.dt = dt;
-    const kbAnim = this.isAnimated(this.state.keyboard.effect);
+    const kbAnim = this.isAnimated(this.state.keyboard.effect) || !!this.timerState;
     const msAnim = this.isAnimated(this.state.mouse.effect);
     // Un flash en cours (ou qui vient de finir) doit être dessiné puis effacé
     const flashing = this.flashState && now - this.flashState.t0 < this.flashState.ms + 100;
@@ -459,6 +487,8 @@ class LedEngine extends EventEmitter {
       out[key.id] = scale(rgb, bright);
     }
 
+    this.drawLiveLayers(out, bright, nowMs);
+
     // Flash bref (retour visuel des macros) par-dessus tout le reste
     const fl = this.flashLevel();
     if (fl > 0) {
@@ -480,6 +510,33 @@ class LedEngine extends EventEmitter {
       if (nv <= 0) this.sparkles.delete(k); else this.sparkles.set(k, nv);
     }
     return out;
+  }
+
+  // Minuteur puis témoins, par-dessus l'effet et le calque
+  drawLiveLayers(out, bright, nowMs) {
+    const tm = this.timerState;
+    if (tm) {
+      const elapsed = nowMs - tm.t0;
+      if (elapsed < tm.ms) {
+        // Temps restant : rangée F1-F12 qui se vide, du vert au rouge
+        const left = 1 - elapsed / tm.ms;
+        const color = gaugeColor(1 - left);
+        const lit = left * TIMER_KEYS.length;
+        TIMER_KEYS.forEach((id, i) => {
+          if (!(id in out)) return;
+          const level = clamp01(lit - i);
+          const pulse = level > 0 && level < 1 ? 0.6 + 0.4 * Math.sin(nowMs / 160) : 1;
+          out[id] = scale(color, bright * Math.max(0.08, level * pulse));
+        });
+      } else {
+        // Temps écoulé : tout le clavier clignote en orange
+        const on = Math.floor((elapsed - tm.ms) / 250) % 2 === 0 && elapsed - tm.ms < TIMER_DONE_MS;
+        if (on) for (const id of Object.keys(out)) out[id] = scale([255, 90, 0], Math.max(bright, 0.3));
+      }
+    }
+    for (const [id, rgb] of Object.entries(this.indicators)) {
+      if (id in out && Array.isArray(rgb)) out[id] = scale(rgb, Math.max(bright, 0.2));
+    }
   }
 
   computeMouse() {
@@ -521,4 +578,6 @@ class LedEngine extends EventEmitter {
   }
 }
 
-module.exports = { LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS, SCREEN_COLS, SCREEN_ROWS };
+module.exports = {
+  LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS, SCREEN_COLS, SCREEN_ROWS, TIMER_KEYS, TIMER_DONE_MS,
+};

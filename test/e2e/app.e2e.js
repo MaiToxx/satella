@@ -294,6 +294,24 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await sleep(600);
     check('restauration', (await page.textContent('#toast')).includes('restaurée'));
 
+    // ---- Minuteur (Accueil) : barre F1-F12 sur l'aperçu, arrêt ----
+    await page.click('.nav-btn[data-page="home"]');
+    await page.click('[data-timer="5"]');
+    await sleep(400);
+    const timerLeft = await page.textContent('#timer-left');
+    check('minuteur lancé', /^0[45]:\d\d$/.test(timerLeft) && (await page.isVisible('#timer-stop')), timerLeft);
+    check('durée du minuteur retenue', (await page.evaluate(() => window.satella.settings.get())).timerMinutes === 5);
+    await page.click('.nav-btn[data-page="keyboard"]');
+    await sleep(300);
+    const rgbOf = (css) => (css.match(/\d+/g) || []).map(Number);
+    const [tr, tg, tb] = rgbOf(await led('f1'));
+    check('minuteur : F1 en vert sur l’aperçu', tg > 100 && tg > tr && tg > tb, await led('f1'));
+    await page.click('.nav-btn[data-page="home"]');
+    await page.click('#timer-stop');
+    await sleep(300);
+    check('minuteur arrêté', (await page.textContent('#timer-left')) === '--:--'
+      && !(await page.evaluate(() => window.satella.timer.get())).running);
+
     // ---- Paramètres, diagnostic, extinction ----
     await page.click('.nav-btn[data-page="settings"]');
     await page.click('#set-offlock + span');
@@ -309,6 +327,60 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('mode nuit enregistré', st.nightMode && st.nightFrom === '22:15' && st.nightAction === 'dim'
       && !(await page.locator('#set-night-level').isDisabled()), JSON.stringify([st.nightMode, st.nightFrom, st.nightAction]));
     check('statistiques affichées', (await page.textContent('#set-stats-info')).length > 0);
+
+    // Mode nuit « éteindre » sur la plage en cours : « rallumer » tient
+    // jusqu'à la fin de la plage
+    const hm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    await page.evaluate((r) => window.satella.settings.set(r), {
+      nightMode: true, nightAction: 'off',
+      nightFrom: hm(new Date(Date.now() - 3600e3)), nightTo: hm(new Date(Date.now() + 3600e3)),
+    });
+    await sleep(300);
+    check('mode nuit : LED éteintes pendant la plage', (await page.textContent('#leds-toggle')).includes('rallumer'));
+    await page.click('#leds-toggle');
+    await sleep(300);
+    await page.evaluate(() => window.satella.settings.set({})); // nouveau passage du mode nuit
+    await sleep(300);
+    check('mode nuit : « rallumer » l’emporte jusqu’à la fin de la plage',
+      !(await page.textContent('#leds-toggle')).includes('rallumer'));
+    await page.evaluate(() => window.satella.settings.set({ nightMode: false }));
+    await sleep(200);
+
+    // Témoins Verr. Maj / Verr. Num
+    await page.click('#set-locks + span');
+    await page.fill('#set-lock-color', '#ff8800');
+    await sleep(300);
+    const stLocks = await page.evaluate(() => window.satella.settings.get());
+    check('témoins enregistrés', stLocks.lockIndicators === true && stLocks.lockColor === '#ff8800');
+    check('témoins : disponibilité signalée', (await page.isVisible('#set-locks-warn')) === (process.platform !== 'win32'));
+
+    // Raccourcis de l'application
+    await page.click('.app-sc-row[data-id="leds"] .trigger-input');
+    await page.keyboard.press('Control+Alt+KeyL');
+    await sleep(400);
+    check('raccourci de l’application enregistré',
+      (await page.evaluate(() => window.satella.settings.get())).appShortcuts.leds === 'Ctrl+Alt+L');
+    await page.click('.app-sc-row[data-id="nextProfile"] .trigger-input');
+    await page.keyboard.press('Control+Alt+KeyK'); // déjà pris par une macro
+    await sleep(500);
+    check('raccourci de l’application en conflit signalé',
+      (await page.locator('.app-sc-row[data-id="nextProfile"] .warn-text').count()) === 1);
+    await page.click('.app-sc-row[data-id="nextProfile"] .sc-clear');
+    await sleep(300);
+    check('raccourci de l’application effacé', (await page.inputValue('.app-sc-row[data-id="nextProfile"] .trigger-input')) === ''
+      && (await page.locator('.app-sc-row[data-id="nextProfile"] .warn-text').count()) === 0);
+
+    // Sauvegardes automatiques : création, liste, restauration
+    await page.click('#backup-now');
+    await sleep(400);
+    const bdir = path.join(data, 'satella-data', 'sauvegardes');
+    check('sauvegarde créée et listée', (await page.locator('.backup-item').count()) >= 1
+      && fs.readdirSync(bdir).some((n) => /^sauvegarde-.*\.satella$/.test(n)));
+    await page.click('.backup-item .b-restore >> nth=0');
+    await sleep(600);
+    check('restauration d’une sauvegarde automatique', (await page.textContent('#toast')).includes('restaurée'));
+    check('sauvegarde : nom hors du dossier refusé',
+      (await page.evaluate(() => window.satella.backups.restore('../settings.json'))).ok === false);
     await page.click('#diag-copy');
     await sleep(300);
     const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
