@@ -6,14 +6,22 @@ souris **Risophy PC365A**, avec un éditeur de macros avancé.
 ## Installer et lancer
 
 Version distribuée : installe `Satella-Setup-X.Y.Z.exe` (releases GitHub du
-dépôt MaiToxx/satella). Les **mises à jour sont automatiques** : le bouton
-« Vérifier les mises à jour » (page Accueil) télécharge la nouvelle version
-et l'installe au redémarrage de l'app.
+dépôt MaiToxx/satella). Les **mises à jour** sont vérifiées au lancement puis
+toutes les 6 heures ; leurs nouveautés se lisent avant de télécharger, et
+l'installation peut être automatique (Paramètres). Après une mise à jour, un
+écran « Quoi de neuf » s'affiche une fois.
 
 Développement : `npm install` puis `npm start` dans ce dossier (Node.js requis).
-Quitte d'abord la version installée (zone de notification > Quitter) : une
-seule instance de Satella peut tourner à la fois.
-Tests : `npm test` (aucun matériel ni module natif nécessaire).
+Une seule instance de Satella tourne par dossier de données : pour lancer la
+version de développement à côté de la version installée, donne-lui son propre
+dossier (`SATELLA_USER_DATA=./donnees-dev npm start`, ou sous Windows
+`set SATELLA_USER_DATA=donnees-dev && npm start`).
+
+Tests :
+- `npm test` : tests unitaires (aucun matériel ni module natif nécessaire) ;
+- `npm run test:e2e` : l'application lancée pour de vrai et pilotée comme par un
+  utilisateur (macros, profils, import/export, effets...), dans un dossier de
+  données temporaire ; sous Linux sans écran : `xvfb-run -a npm run test:e2e`.
 
 Publier une version (après avoir mis à jour les notes de version dans
 [build/release-notes.md](build/release-notes.md), reprises dans la release
@@ -45,9 +53,10 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 - **Effets logiciels** (calculés par Satella et diffusés en continu via le mode
   « dynamique » du clavier, sans écriture en flash) : Onde de choc à la frappe,
   Feu, Pluie, Balayage, Tourbillon, Disco, Dégradé bicolore, **Jauge système**
-  (F1-F12 = processeur, rangée des chiffres = mémoire vive) et **Visualiseur
+  (F1-F12 = processeur, rangée des chiffres = mémoire vive), **Visualiseur
   audio** (le son joué par Windows anime le clavier, une colonne par bande de
-  fréquence).
+  fréquence) et **Ambiance écran** (le clavier reprend les couleurs de l'écran
+  principal, zone par zone).
 - **Calque** : des touches fixes par-dessus n'importe quel effet (par exemple
   ZQSD en blanc sur une vague). Avec un effet animé, Satella calcule l'effet
   elle-même et le diffuse au clavier.
@@ -64,7 +73,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   (Unicode ; les retours à la ligne deviennent des appuis sur Entrée), délais,
   clics/mouvements/molette souris (positions absolues valables sur tous les
   écrans), **boucles imbriquées sur plusieurs niveaux**, exécution d'une autre
-  macro (les appels en cycle sont refusés).
+  macro (les appels en cycle sont refusés), **Ouvrir** un programme, un fichier
+  ou un lien.
 - **Éditeur** : glisser-déposer des étapes (y compris dans une boucle),
   annuler/rétablir (Ctrl+Z / Ctrl+Y), Ctrl+S pour sauvegarder, double-clic pour
   modifier. « Tester » joue la version affichée, même non sauvegardée.
@@ -101,11 +111,13 @@ remplacés.
 « Tout sauvegarder » enregistre macros, profils, abréviations, turbos, réglages
 et calibration. Un fichier importé est entièrement validé (types, bornes,
 longueurs) et une sauvegarde des données actuelles est faite avant toute
-restauration.
+restauration. Des étapes « Ouvrir » (programmes, liens) dans un fichier reçu ne
+sont gardées qu'avec ton accord.
 
 ### Système
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
-  extinction des LED et activation des macros.
+  extinction des LED, activation des macros et installation d'une mise à jour
+  prête.
 - **Optimiseur mémoire** (principe MemReduct), avec nettoyage automatique au
   plus toutes les 10 minutes, qui épargne l'application au premier plan.
 - **Dépannage** (page Paramètres) : rapport de diagnostic copiable, accès aux
@@ -172,4 +184,5 @@ src/system/memory.js          Optimiseur mémoire
 src/system/logger.js          Journal fichier
 ui/                           Interface (HTML/CSS/JS)
 test/                         Tests unitaires (node --test)
+test/e2e/                     Test de bout en bout de l'application (Playwright)
 ```

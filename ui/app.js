@@ -44,6 +44,7 @@ const EFFECTS = [
   ['gradient', 'Dégradé'],
   ['sysmon', 'Jauge système'],
   ['audio', 'Visualiseur audio'],
+  ['screen', 'Ambiance écran'],
   ['off', 'Éteint'],
 ];
 const MOUSE_EFFECTS = [
@@ -57,6 +58,7 @@ const MOUSE_EFFECTS = [
 const EFFECT_HINTS = {
   sysmon: 'F1 à F12 : charge du processeur. Rangée des chiffres : mémoire vive. Les autres touches gardent la couleur choisie, atténuée.',
   audio: 'Le son joué par Windows anime le clavier : une colonne par bande de fréquence. La couleur 2 colore le haut des colonnes.',
+  screen: 'Le clavier reprend les couleurs de l\'écran principal, zone par zone (films, jeux). La vitesse règle la réactivité.',
 };
 const COLOR2_EFFECTS = ['gradient', 'audio'];
 
@@ -121,6 +123,7 @@ const ICON_PATHS = {
   redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
   grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   warn: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
+  open: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
 function svg(name, cls = 'icon sm') {
   return `<svg class="${cls}" viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`;
@@ -202,6 +205,72 @@ $('#card-keyboard').addEventListener('click', () => showPage('keyboard'));
 $('#card-mouse').addEventListener('click', () => showPage('mouse'));
 
 /* ================= Mises à jour automatiques ================= */
+// Notes de version (Markdown simple : titres ##, listes -) en HTML échappé
+function renderNotes(md) {
+  const out = [];
+  let inList = false;
+  for (const raw of String(md || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push(`<li>${esc(item[1])}</li>`);
+      continue;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+    const title = /^#{1,6}\s+(.*)$/.exec(line);
+    if (title) out.push(`<h4>${esc(title[1])}</h4>`);
+    else if (line) out.push(`<p>${esc(line)}</p>`);
+  }
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+function showNotesModal(title, notes, actions = []) {
+  const modal = $('#modal');
+  modal.innerHTML = `
+    <h3>${esc(title)}</h3>
+    <div class="release-notes">${renderNotes(notes) || '<p class="muted">Pas de notes pour cette version.</p>'}</div>
+    <div class="btn-row" style="margin-top:14px" id="notes-actions"></div>`;
+  const row = $('#notes-actions');
+  for (const a of [...actions, { label: 'Fermer', run: () => {} }]) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (a.primary ? ' primary' : '');
+    b.textContent = a.label;
+    b.addEventListener('click', () => { $('#modal-backdrop').hidden = true; a.run(); });
+    row.appendChild(b);
+  }
+  $('#modal-backdrop').hidden = false;
+}
+
+async function startUpdateDownload() {
+  const out = $('#update-result');
+  out.textContent = 'Téléchargement...';
+  const dl = await window.satella.downloadUpdate();
+  if (!dl.ok) out.textContent = 'Téléchargement impossible : ' + dl.error;
+}
+
+// Version disponible : téléchargement au clic, nouveautés consultables avant
+function offerUpdate(latest, notes) {
+  const out = $('#update-result');
+  out.innerHTML = '';
+  out.append(`Nouvelle version ${latest} disponible. `);
+  const dl = document.createElement('button');
+  dl.className = 'btn small primary';
+  dl.textContent = 'Télécharger et installer';
+  dl.addEventListener('click', startUpdateDownload);
+  out.appendChild(dl);
+  if (notes) {
+    const nb = document.createElement('button');
+    nb.className = 'btn small';
+    nb.textContent = 'Nouveautés';
+    nb.style.marginLeft = '6px';
+    nb.addEventListener('click', () => showNotesModal(`Nouveautés de la version ${latest}`, notes,
+      [{ label: 'Télécharger et installer', primary: true, run: startUpdateDownload }]));
+    out.appendChild(nb);
+  }
+}
+
 $('#update-check').addEventListener('click', async () => {
   const out = $('#update-result');
   out.textContent = 'Vérification en cours...';
@@ -210,41 +279,26 @@ $('#update-check').addEventListener('click', async () => {
     out.textContent = 'Vérification impossible : ' + res.error;
     return;
   }
-  if (res.newer) {
-    out.textContent = `Nouvelle version ${res.latest} : téléchargement...`;
-    const dl = await window.satella.downloadUpdate();
-    if (!dl.ok) out.textContent = 'Téléchargement impossible : ' + dl.error;
-  } else {
-    out.textContent = `Tu as la dernière version (${res.current}).`;
-  }
+  if (res.newer) offerUpdate(res.latest, res.notes);
+  else out.textContent = `Tu as la dernière version (${res.current}).`;
 });
-window.satella.onUpdateAvailable(({ latest }) => {
-  toast(`Nouvelle version ${latest} disponible.`, 5000);
-  const out = $('#update-result');
-  out.innerHTML = '';
-  out.append(`Nouvelle version ${latest} disponible. `);
-  const b = document.createElement('button');
-  b.className = 'btn small primary';
-  b.textContent = 'Télécharger et installer';
-  b.addEventListener('click', async () => {
-    out.textContent = 'Téléchargement...';
-    const dl = await window.satella.downloadUpdate();
-    if (!dl.ok) out.textContent = 'Téléchargement impossible : ' + dl.error;
-  });
-  out.appendChild(b);
+window.satella.onUpdateAvailable(({ latest, notes }) => {
+  toast(`Nouvelle version ${latest} disponible (page Accueil).`, 5000);
+  offerUpdate(latest, notes);
 });
 window.satella.onUpdateProgress(({ percent }) => {
   $('#update-result').textContent = `Téléchargement : ${percent}%`;
 });
-window.satella.onUpdateReady(({ version }) => {
+window.satella.onUpdateReady(({ version, auto }) => {
   const out = $('#update-result');
   out.innerHTML = '';
-  out.append(`Version ${version} prête. `);
+  out.append(`Version ${version} prête${auto ? ' : installée automatiquement à la fermeture de Satella' : ''}. `);
   const b = document.createElement('button');
   b.className = 'btn small primary';
   b.textContent = 'Redémarrer et installer';
   b.addEventListener('click', () => window.satella.installUpdate());
   out.appendChild(b);
+  if (auto) toast(`Version ${version} téléchargée : installée à la fermeture, ou tout de suite depuis l'Accueil.`, 6000);
 });
 window.satella.onUpdateError(({ message }) => {
   $('#update-result').textContent = 'Erreur de mise à jour : ' + message;
@@ -586,7 +640,7 @@ const audioViz = (() => {
   let warned = false;
 
   function report(msg) {
-    window.satella.audio.reportError(msg);
+    window.satella.capture.reportError('audio', msg);
     if (!warned) toast('Visualiseur audio : ' + msg, 5000);
     warned = true;
   }
@@ -636,7 +690,7 @@ const audioViz = (() => {
       for (let b = b0; b < b1 && b < data.length; b++) if (data[b] > max) max = data[b];
       bands.push(Math.max(0, Math.min(1, (max / 255 - 0.2) / 0.7)));
     }
-    window.satella.audio.sendBands(bands);
+    window.satella.capture.sendBands(bands);
   }
 
   function stop() {
@@ -651,7 +705,100 @@ const audioViz = (() => {
   return { start, stop };
 })();
 window.__satellaAudio = audioViz;
-window.satella.audio.onStop(() => audioViz.stop());
+
+/* ================= Ambiance écran ================= */
+// Capture vidéo de l'écran principal (10 images/s, basse définition) :
+// moyenne des couleurs sur une grille 20 x 6 envoyée au moteur d'effets.
+const SCREEN_COLS = 20;
+const SCREEN_ROWS = 6;
+const screenViz = (() => {
+  let stream = null;
+  let video = null;
+  let ctx = null;
+  let timer = null;
+  let starting = false;
+  let warned = false;
+  const W = 160;
+  const H = 90;
+  const api = { start, stop, framesSent: 0 };
+
+  function report(msg) {
+    window.satella.capture.reportError('screen', msg);
+    if (!warned) toast('Ambiance écran : ' + msg, 5000);
+    warned = true;
+  }
+
+  async function start() {
+    if (stream || starting) return;
+    starting = true;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        audio: false,
+        video: { width: 640, height: 360, frameRate: 10 },
+      });
+    } catch (err) {
+      starting = false;
+      report('capture de l\'écran impossible (' + err.message + ')');
+      return;
+    }
+    starting = false;
+    warned = false;
+    video = document.createElement('video');
+    video.muted = true;
+    video.srcObject = stream;
+    video.play().catch(() => {});
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    ctx = canvas.getContext('2d', { willReadFrequently: true });
+    timer = setInterval(tick, 100);
+  }
+
+  function tick() {
+    if (!video || video.readyState < 2) return;
+    ctx.drawImage(video, 0, 0, W, H);
+    const px = ctx.getImageData(0, 0, W, H).data;
+    const cw = W / SCREEN_COLS;
+    const ch = H / SCREEN_ROWS;
+    const grid = new Array(SCREEN_COLS * SCREEN_ROWS * 3);
+    for (let r = 0; r < SCREEN_ROWS; r++) {
+      for (let c = 0; c < SCREEN_COLS; c++) {
+        let R = 0, G = 0, B = 0, n = 0;
+        const y0 = Math.floor(r * ch), y1 = Math.floor((r + 1) * ch);
+        const x0 = Math.floor(c * cw), x1 = Math.floor((c + 1) * cw);
+        for (let y = y0; y < y1; y++) {
+          for (let x = x0; x < x1; x++) {
+            const i = (y * W + x) * 4;
+            R += px[i]; G += px[i + 1]; B += px[i + 2]; n++;
+          }
+        }
+        const o = (r * SCREEN_COLS + c) * 3;
+        grid[o] = Math.round(R / n);
+        grid[o + 1] = Math.round(G / n);
+        grid[o + 2] = Math.round(B / n);
+      }
+    }
+    window.satella.capture.sendGrid(grid);
+    api.framesSent++;
+  }
+
+  function stop() {
+    clearInterval(timer);
+    timer = null;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    if (video) video.srcObject = null;
+    video = null;
+  }
+
+  return api;
+})();
+window.__satellaScreen = screenViz;
+
+window.satella.capture.onStop((kind) => {
+  if (kind === 'audio') audioViz.stop();
+  if (kind === 'screen') screenViz.stop();
+});
 
 /* ================= Macros ================= */
 const STEP_META = {
@@ -667,7 +814,15 @@ const STEP_META = {
   mouseWheel: { icon: 'wheel', name: 'Molette' },
   loop: { icon: 'loop', name: 'Boucle' },
   runMacro: { icon: 'play', name: 'Exécuter macro' },
+  open: { icon: 'open', name: 'Ouvrir' },
 };
+
+// Cible d'une étape « Ouvrir » (même règle que le processus principal) :
+// lien web ou courriel, ou chemin Windows absolu
+function validOpenTarget(v) {
+  const s = String(v || '').trim();
+  return /^(https?:\/\/|mailto:)[^\s<>"]+$/i.test(s) || /^([a-zA-Z]:\\|\\\\[^\\])[^\r\n\t<>"|?*]*$/.test(s);
+}
 const BUTTON_LABELS = { left: 'gauche', right: 'droit', middle: 'molette', x1: 'latéral 1', x2: 'latéral 2' };
 const MAX_LOOP_DEPTH = 8;
 
@@ -697,6 +852,7 @@ function stepDesc(s) {
       const m = MACROS.find((x) => x.id === s.macroId);
       return m ? m.name : '(macro supprimée)';
     }
+    case 'open': return s.target || '';
     default: return s.type;
   }
 }
@@ -938,10 +1094,20 @@ function renderMacroEditor() {
 
 // Liste renvoyée par le processus principal (versions sauvegardées) +
 // brouillons non sauvegardés des autres macros, conservés
+// L'ordre affiché est conservé : un brouillon ne part pas en fin de liste
+// quand une autre macro est sauvegardée.
 function mergeSavedMacros(saved, drafts) {
   markSaved(saved);
-  MACROS = saved.map((s) => drafts.find((d) => d.id === s.id) || s);
-  for (const d of drafts) if (!saved.some((s) => s.id === d.id)) MACROS.push(d);
+  const byId = new Map(saved.map((s) => [s.id, s]));
+  const merged = [];
+  for (const m of MACROS) {
+    const draft = drafts.find((d) => d.id === m.id);
+    if (draft) merged.push(draft);
+    else if (byId.has(m.id)) merged.push(byId.get(m.id));
+    byId.delete(m.id);
+  }
+  for (const s of byId.values()) merged.push(s);
+  MACROS = merged;
 }
 
 async function saveCurrentMacro() {
@@ -1198,6 +1364,15 @@ function openStepModal(type, editPath = null, addPath = []) {
       fields = `<label>Nombre de répétitions</label><input type="number" id="sf-count" min="1" max="10000" value="${+s.count || 2}">
         <p class="muted" style="grid-column:1/3">Les étapes de la boucle s'ajoutent ensuite sous celle-ci dans la liste.</p>`;
       break;
+    case 'open':
+      fields = `<label>Programme, fichier ou lien</label>
+        <div class="btn-row">
+          <input type="text" id="sf-target" style="flex:1" maxlength="1000" placeholder="https://… ou C:\\…\\programme.exe" value="${esc(s.target || '')}">
+          <button class="btn small" id="sf-browse">Parcourir…</button>
+        </div>
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">Un lien s'ouvre dans le navigateur, un programme se lance,
+          un fichier s'ouvre avec son application habituelle.</p>`;
+      break;
     case 'runMacro':
       fields = macroOptions
         ? `<label>Macro à exécuter</label><select id="sf-macro">${macroOptions}</select>`
@@ -1216,6 +1391,12 @@ function openStepModal(type, editPath = null, addPath = []) {
     </div>`;
   backdrop.hidden = false;
 
+  if ($('#sf-browse')) {
+    $('#sf-browse').addEventListener('click', async () => {
+      const file = await window.satella.pickFile();
+      if (file) $('#sf-target').value = file;
+    });
+  }
   $('#sf-cancel').addEventListener('click', () => { backdrop.hidden = true; });
   $('#sf-ok').addEventListener('click', () => {
     const gap = $('#sf-gap').value;
@@ -1244,6 +1425,12 @@ function openStepModal(type, editPath = null, addPath = []) {
       case 'loop':
         out.count = Math.max(1, +$('#sf-count').value || 1);
         out.steps = existing ? existing.steps || [] : [];
+        break;
+      case 'open':
+        out.target = $('#sf-target').value.trim();
+        if (!validOpenTarget(out.target)) {
+          return toast('Indique un lien (https://…) ou le chemin complet d\'un programme ou fichier (C:\\…).', 4500);
+        }
         break;
       case 'runMacro':
         if (!$('#sf-macro')) { backdrop.hidden = true; return; }
@@ -1954,6 +2141,9 @@ function renderSettings(s) {
   $('#set-offlock').checked = !!s.offOnLock;
   $('#set-flash').checked = !!s.flashOnMacro;
   $('#set-autoupdate').checked = s.autoCheckUpdates;
+  $('#set-autoinstall').checked = !!s.autoInstallUpdates;
+  $('#set-autoinstall').disabled = !s.autoCheckUpdates;
+  $('#row-autoinstall').style.opacity = s.autoCheckUpdates ? '1' : '.45';
   $('#mem-auto').checked = s.autoOptimize;
   $('#mem-threshold').value = s.autoOptimizeThreshold;
   $('#mem-threshold-val').textContent = s.autoOptimizeThreshold + '%';
@@ -1975,6 +2165,7 @@ const SETTING_SWITCHES = {
   '#set-offlock': 'offOnLock',
   '#set-flash': 'flashOnMacro',
   '#set-autoupdate': 'autoCheckUpdates',
+  '#set-autoinstall': 'autoInstallUpdates',
 };
 for (const [sel, key] of Object.entries(SETTING_SWITCHES)) {
   $(sel).addEventListener('change', async (e) => {
@@ -2131,6 +2322,11 @@ async function init() {
 
   window.satella.setPage(currentPage);
   window.satella.ready();
+
+  // Première ouverture après une mise à jour : les nouveautés, une fois
+  if (data.whatsNew) {
+    setTimeout(() => showNotesModal(`Satella ${data.whatsNew.version} : quoi de neuf ?`, data.whatsNew.notes), 600);
+  }
 }
 
 init();

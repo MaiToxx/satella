@@ -75,3 +75,30 @@ test('sauvegarde complète : aller-retour et un seul profil par défaut', () => 
   assert.equal(d.ledState.keyboard.effect, 'fire');
   assert.equal(d.snippets[0].abbr, ';m');
 });
+
+test('étape « Ouvrir » : seuls les liens web/courriel et les chemins Windows passent', () => {
+  const { openTarget, openTargets, stripOpenSteps } = require('../src/shared/sanitize');
+  assert.equal(openTarget('https://discord.com/app'), 'https://discord.com/app');
+  assert.equal(openTarget('  mailto:moi@exemple.fr '), 'mailto:moi@exemple.fr');
+  assert.equal(openTarget('C:\\Program Files\\OBS\\obs64.exe'), 'C:\\Program Files\\OBS\\obs64.exe');
+  assert.equal(openTarget('\\\\serveur\\partage\\doc.pdf'), '\\\\serveur\\partage\\doc.pdf');
+  for (const bad of ['javascript:alert(1)', 'file:///C:/x', 'calc.exe', 'ms-settings:display', 'C:\\a\nb', '', null]) {
+    assert.equal(openTarget(bad), '', String(bad));
+  }
+  const macros = [{ id: 'a', steps: [
+    { type: 'open', target: 'https://a.fr' },
+    { type: 'loop', count: 2, steps: [{ type: 'open', target: 'C:\\b.exe' }, { type: 'delay', ms: 1 }] },
+  ] }];
+  assert.deepEqual(openTargets(macros), ['https://a.fr', 'C:\\b.exe']);
+  const clean = stripOpenSteps(macros);
+  assert.deepEqual(openTargets(clean), []);
+  assert.equal(clean[0].steps[0].steps.length, 1);
+});
+
+test('import : une étape « Ouvrir » invalide est retirée', () => {
+  const doc = { format: 'satella', version: 1, kind: 'profile', profile: { name: 'P', macros: [{ id: 'm', steps: [
+    { type: 'open', target: 'https://ok.fr' }, { type: 'open', target: 'powershell -c evil' },
+  ] }] } };
+  const { profile } = parseImport(JSON.stringify(doc), KEYS);
+  assert.deepEqual(profile.macros[0].steps.map((s) => s.target), ['https://ok.fr']);
+});
