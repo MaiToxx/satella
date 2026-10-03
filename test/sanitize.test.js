@@ -102,3 +102,15 @@ test('import : une étape « Ouvrir » invalide est retirée', () => {
   const { profile } = parseImport(JSON.stringify(doc), KEYS);
   assert.deepEqual(profile.macros[0].steps.map((s) => s.target), ['https://ok.fr']);
 });
+
+test('import : étape « Attendre une touche » et réglages du mode nuit validés', () => {
+  const { settingsPatch } = require('../src/shared/sanitize');
+  const doc = { format: 'satella', version: 1, kind: 'profile', profile: { name: 'P', macros: [{ id: 'm', steps: [
+    { type: 'waitKey', key: 'f8', timeoutMs: 999999999 }, { type: 'waitKey', key: 'inventée' },
+  ] }] } };
+  const { profile } = parseImport(JSON.stringify(doc), KEYS);
+  assert.deepEqual(profile.macros[0].steps, [{ type: 'waitKey', gapMs: 15, key: 'f8', timeoutMs: 600000 }]);
+  assert.deepEqual(settingsPatch({
+    keyStats: true, nightMode: true, nightFrom: '22:30', nightTo: '24:00', nightAction: 'boom', nightLevel: 1,
+  }), { keyStats: true, nightMode: true, nightFrom: '22:30', nightLevel: 5 });
+});

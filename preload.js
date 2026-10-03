@@ -83,6 +83,12 @@ contextBridge.exposeInMainWorld('satella', {
     onState: on('turbo:state'),
   },
 
+  // Statistiques de frappe (comptage par touche, stocké sur ce PC)
+  stats: {
+    get: () => ipcRenderer.invoke('stats:get'),
+    reset: () => ipcRenderer.invoke('stats:reset'),
+  },
+
   memory: {
     status: () => ipcRenderer.invoke('memory:status'),
     optimize: () => ipcRenderer.invoke('memory:optimize'),

@@ -131,3 +131,38 @@ test('une erreur d’ouverture arrête la macro avec un message', async () => {
   await engine.play('x', { id: 'x', steps: [{ type: 'open', target: 'C:\\nope.exe' }, { type: 'keyTap', key: 'a' }] });
   assert.deepEqual(errors, ['introuvable']);
 });
+
+test('étape « Attendre une touche » : reprend à l’appui, au délai ou à l’arrêt', async () => {
+  const { engine, injector } = make([]);
+  engine.startActivityFeed = () => true; // écoute simulée
+  const waits = [];
+  engine.on('wait-change', () => waits.push(engine.waitingForKey));
+  // 1) appui sur la touche attendue (une autre touche ne suffit pas)
+  const p1 = engine.play('w1', { id: 'w1', steps: [
+    { type: 'waitKey', key: 'f8', gapMs: 0 }, { type: 'keyTap', key: 'x', gapMs: 0 },
+  ] });
+  await new Promise((r) => setTimeout(r, 30));
+  engine.emit('key-activity', { key: 'f7', down: true });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(!injector.log.includes('down x'), 'pas encore reprise');
+  engine.emit('key-activity', { key: 'f8', down: true });
+  await p1;
+  assert.ok(injector.log.includes('down x'));
+  assert.deepEqual(waits, [true, false]);
+  // 2) délai maximal dépassé : la macro continue
+  const t0 = Date.now();
+  await engine.play('w2', { id: 'w2', steps: [{ type: 'waitKey', key: 'f8', timeoutMs: 80, gapMs: 0 }] });
+  assert.ok(Date.now() - t0 >= 75);
+  // 3) arrêt pendant l'attente
+  const p3 = engine.play('w3', { id: 'w3', steps: [{ type: 'waitKey', key: 'f8' }] });
+  setTimeout(() => engine.stop('w3'), 60);
+  await p3;
+  assert.equal(engine.waitingForKey, false);
+});
+
+test('étape « Attendre une touche » sans écoute disponible : erreur claire', async () => {
+  const { engine, errors } = make([]);
+  engine.startActivityFeed = () => false;
+  await engine.play('w', { id: 'w', steps: [{ type: 'waitKey', key: 'a' }] });
+  assert.match(errors[0], /écoute du clavier indisponible/);
+});

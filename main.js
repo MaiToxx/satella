@@ -30,6 +30,7 @@ const input = require('./src/macros/input');
 const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
 const sanitize = require('./src/shared/sanitize');
+const { inTimeWindow } = require('./src/system/schedule');
 
 // Dossier de données séparé (tests, version de développement lancée à
 // côté de la version installée) : SATELLA_USER_DATA=<dossier>
@@ -59,6 +60,9 @@ let autoOptTimer = null;
 let lastAutoOpt = 0;
 let fgTimer = null;
 let idleTimer = null;
+let nightTimer = null;
+let nightDim = null;            // facteur d'atténuation du mode nuit, ou null
+let keyStats = { counts: {}, total: 0, since: null };
 let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
@@ -99,6 +103,12 @@ const DEFAULT_SETTINGS = {
   autoInstallUpdates: false,
   offOnLock: false,
   flashOnMacro: false,
+  keyStats: false,          // statistiques de frappe (comptage par touche, local)
+  nightMode: false,         // mode nuit programmé
+  nightFrom: '23:00',
+  nightTo: '07:00',
+  nightAction: 'off',       // 'off' (éteindre) | 'dim' (atténuer)
+  nightLevel: 30,           // % de luminosité en mode « atténuer »
 };
 
 // Démarrage silencieux : Windows relance Satella avec ce drapeau
@@ -262,6 +272,11 @@ function setupEngines() {
   // État LED sauvegardé
   ledEngine.loadState(store.read('led-state', null));
 
+  // Statistiques de frappe (comptage par touche uniquement, jamais la suite
+  // des touches tapées)
+  keyStats = { counts: {}, total: 0, since: null, ...store.read('key-stats', {}) };
+  ledEngine.setHeatmap(keyStats.counts);
+
   // Macros sauvegardées (déclencheurs enregistrés par applySettings)
   macros = store.read('macros', []);
 
@@ -295,8 +310,8 @@ function setupEngines() {
   ledEngine.on('state', (state) => {
     store.writeLater('led-state', state, 400);
     if (settings.ledsEnabled && !isDimmed()) {
-      direct.applyKeyboard(state.keyboard);
-      direct.applyMouse(state.mouse);
+      direct.applyKeyboard(hwState('keyboard'));
+      direct.applyMouse(hwState('mouse'));
     }
     updateHookNeed();
     updateSysmon();
@@ -328,6 +343,13 @@ function setupEngines() {
   };
   macroEngine.on('key-activity', ({ key, down, shift, ctrl, alt, meta }) => {
     if (!down || !key) return;
+    // Statistiques : seulement les frappes de l'utilisateur
+    if (settings.keyStats && !calibrating && turboRunning.size === 0 && !macroEngine.busy) {
+      keyStats.counts[key] = (keyStats.counts[key] || 0) + 1;
+      keyStats.total++;
+      if (!keyStats.since) keyStats.since = new Date().toISOString();
+      store.writeLater('key-stats', keyStats, 5000);
+    }
     // Expansion de texte : uniquement la frappe naturelle de l'utilisateur
     // (pas pendant un enregistrement, une calibration, une macro ou un turbo)
     if (settings.macrosEnabled && !macroEngine.recording && !calibrating
@@ -355,6 +377,8 @@ function setupEngines() {
     send('macro:play-state', s);
     if (settings.flashOnMacro) flashKeyboard(s.playing ? [0, 255, 120] : [255, 40, 40]);
   });
+  // Étape « Attendre une touche » : l'écoute globale suit le besoin
+  macroEngine.on('wait-change', () => updateHookNeed());
   macroEngine.on('play-error', (e) => {
     console.log('[macro]', e.id, e.message);
     send('macro:play-error', e);
@@ -422,6 +446,14 @@ function applySettings() {
     setDim('idle', false);
   }
   if (!settings.offOnLock) setDim('lock', false);
+
+  // --- Mode nuit programmé ---
+  clearInterval(nightTimer);
+  nightTimer = null;
+  if (settings.nightMode && settings.ledsEnabled) {
+    nightTimer = setInterval(nightTick, 30000);
+  }
+  nightTick();
 
   updateHookNeed();
   updateSysmon();
@@ -560,8 +592,28 @@ function applyLeds({ force = false } = {}) {
     return;
   }
   if (force) direct.forceReapply();
-  direct.applyKeyboard(ledEngine.state.keyboard);
-  direct.applyMouse(ledEngine.state.mouse);
+  direct.applyKeyboard(hwState('keyboard'));
+  direct.applyMouse(hwState('mouse'));
+}
+
+// État envoyé au matériel : luminosité réduite en mode nuit « atténuer »
+function hwState(device) {
+  const st = ledEngine.state[device];
+  return nightDim ? { ...st, brightness: Math.round(st.brightness * nightDim) } : st;
+}
+
+// Mode nuit : extinction (raison « night ») ou atténuation pendant la plage
+function nightTick() {
+  const active = !!(settings.nightMode && settings.ledsEnabled
+    && inTimeWindow(settings.nightFrom, settings.nightTo));
+  const dim = active && settings.nightAction === 'dim'
+    ? Math.max(0.05, Math.min(1, (settings.nightLevel || 30) / 100)) : null;
+  setDim('night', active && settings.nightAction !== 'dim');
+  if (dim !== nightDim) {
+    nightDim = dim;
+    ledEngine.setDimFactor(dim || 1);
+    applyLeds();
+  }
 }
 
 // Réapplique l'état courant au matériel (après une extinction, une veille)
@@ -794,7 +846,8 @@ function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
   const forLeds = settings.ledsEnabled && (eff === 'reactive' || eff === 'ripple');
   const forMacros = settings.macrosEnabled && (macroEngine.recording || snippetEngine.active);
-  const needed = forLeds || forMacros || calibrating || hookDebug;
+  const needed = forLeds || forMacros || calibrating || hookDebug || settings.keyStats
+    || macroEngine.waitingForKey;
   if (needed) macroEngine.startActivityFeed();
   else macroEngine.stopActivityFeed();
 }
@@ -1205,14 +1258,14 @@ function setupIpc() {
       store.write('keymap', map);
       direct.setKeyMap(map);
     }
-    direct.applyKeyboard(ledEngine.state.keyboard);
+    direct.applyKeyboard(hwState('keyboard'));
     updateHookNeed();
     return true;
   });
   ipcMain.handle('calib:cancel', () => {
     calibrating = false;
     direct.kbCalibEnd();
-    direct.applyKeyboard(ledEngine.state.keyboard);
+    direct.applyKeyboard(hwState('keyboard'));
     updateHookNeed();
     return true;
   });
@@ -1274,6 +1327,16 @@ function setupIpc() {
     return turbos;
   });
   ipcMain.handle('shortcuts:errors', () => shortcutErrors);
+
+  // ---- Statistiques de frappe ----
+  ipcMain.handle('stats:get', () => keyStats);
+  ipcMain.handle('stats:reset', () => {
+    keyStats = { counts: {}, total: 0, since: settings.keyStats ? new Date().toISOString() : null };
+    ledEngine.setHeatmap(keyStats.counts);
+    store.write('key-stats', keyStats);
+    ledEngine.renderOnce();
+    return keyStats;
+  });
 
   // ---- Optimiseur mémoire ----
   ipcMain.handle('memory:status', () => memory.readStatus());

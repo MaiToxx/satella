@@ -124,6 +124,13 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     const opened = await app.evaluate(() => global.__opened);
     check('macro « Ouvrir » jouée sans injection de touches', JSON.stringify(opened) === '["https://example.com/seul"]',
       JSON.stringify(opened));
+    // Étape « Attendre une touche »
+    await page.click('#me-add-bar button:has-text("Attendre touche")');
+    await page.selectOption('#sf-key', 'f8');
+    await page.fill('#sf-timeout', '2.5');
+    await page.click('#sf-ok');
+    const waitDesc = await page.evaluate(() => [...document.querySelectorAll('.s-desc')].map((e) => e.textContent).pop());
+    check('étape « Attendre une touche »', waitDesc === 'Attendre F8 (2.5 s max)', waitDesc);
     await page.click('#me-save');
     await page.locator('.macro-item', { hasText: 'onerror' }).click();
 
@@ -199,6 +206,37 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('ambiance écran : capture arrêtée en changeant d’effet',
       (await page.evaluate(() => window.__satellaScreen.framesSent)) === f1);
 
+    // Coloration : couleur récente, annuler / rétablir, préréglage
+    const led = (id) => page.evaluate((k) => document.querySelector(`.kb-key[data-id="${k}"] .led`).style.background, id);
+    check('couleur récente mémorisée', (await page.locator('#kb-recent .swatch').count()) >= 1);
+    // (le sélecteur de couleur change aussi la couleur de base : on la
+    // remet en vert ensuite pour distinguer la touche peinte du reste)
+    await page.fill('#kb-color', '#ff0000');
+    await page.click('.kb-key[data-id="q"]');
+    await page.click('#kb-apply');
+    await page.click('#kb-swatches .swatch >> nth=3'); // #2ee88a
+    await sleep(300);
+    const painted = await led('q');
+    await page.click('#kb-wrap', { position: { x: 5, y: 5 } });
+    await page.keyboard.press('Control+z');
+    await sleep(300);
+    const undone = await led('q');
+    await page.keyboard.press('Control+y');
+    await sleep(300);
+    check('annuler / rétablir la coloration', painted === 'rgb(255, 0, 0)' && undone === 'rgb(46, 232, 138)'
+      && (await led('q')) === painted, `${painted} / ${undone}`);
+    await page.selectOption('#kb-preset', 'rows');
+    await sleep(300);
+    check('préréglage « rangées arc-en-ciel »', (await led('esc')) !== (await led('lctrl')));
+
+    // Carte de chaleur : comptage à activer depuis l'effet
+    await page.click('#kb-effects button[data-fx="heatmap"]');
+    await page.click('#kb-fx-hint button');
+    await sleep(300);
+    check('carte de chaleur : comptage activé', (await page.evaluate(() => window.satella.settings.get())).keyStats === true
+      && (await page.locator('#kb-fx-hint button').count()) === 0);
+    await page.click('#kb-effects button[data-fx="static"]');
+
     // Renommage, réglages mis de côté avant un autre profil
     await page.click('.nav-btn[data-page="profiles"]');
     await page.click('.p-rename');
@@ -261,9 +299,16 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#set-offlock + span');
     await page.click('#set-flash + span');
     await page.click('#set-autoinstall + span');
-    await sleep(200);
+    await page.click('#set-night + span');
+    await page.fill('#set-night-from', '22:15');
+    await page.locator('#set-night-from').dispatchEvent('change');
+    await page.selectOption('#set-night-action', 'dim');
+    await sleep(300);
     const st = await page.evaluate(() => window.satella.settings.get());
     check('réglages enregistrés', st.offOnLock && st.flashOnMacro && st.autoInstallUpdates);
+    check('mode nuit enregistré', st.nightMode && st.nightFrom === '22:15' && st.nightAction === 'dim'
+      && !(await page.locator('#set-night-level').isDisabled()), JSON.stringify([st.nightMode, st.nightFrom, st.nightAction]));
+    check('statistiques affichées', (await page.textContent('#set-stats-info')).length > 0);
     await page.click('#diag-copy');
     await sleep(300);
     const clip = await app.evaluate(({ clipboard }) => clipboard.readText());

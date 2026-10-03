@@ -6,12 +6,12 @@ const FORMAT = 'satella';
 const FORMAT_VERSION = 1;
 
 const KB_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'reactive', 'ripple', 'sparkle',
-  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'screen', 'off'];
+  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'screen', 'heatmap', 'off'];
 const MOUSE_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'sparkle', 'off'];
 const DIRECTIONS = ['lr', 'rl', 'tb', 'bt'];
 const BUTTONS = ['left', 'right', 'middle', 'x1', 'x2'];
 const STEP_TYPES = ['keyTap', 'keyDown', 'keyUp', 'text', 'delay', 'mouseClick', 'mouseDown',
-  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro', 'open'];
+  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro', 'open', 'waitKey'];
 const MAX_LOOP_DEPTH = 8;
 
 // Cible d'une étape « Ouvrir » : lien web ou courriel, ou chemin Windows
@@ -121,6 +121,11 @@ function step(v, keyNames, depth) {
       out.target = openTarget(v.target);
       if (!out.target) return null;
       break;
+    case 'waitKey':
+      out.key = key(v.key);
+      out.timeoutMs = int(v.timeoutMs, 0, 600000, 0);
+      if (!out.key) return null;
+      break;
     default: return null;
   }
   return out;
@@ -216,7 +221,8 @@ const SETTING_TYPES = {
   ledsEnabled: 'boolean', macrosEnabled: 'boolean', autoOptimize: 'boolean',
   autoOptimizeThreshold: 'number', appProfiles: 'boolean', idleOff: 'boolean',
   idleMinutes: 'number', autoCheckUpdates: 'boolean', autoInstallUpdates: 'boolean', offOnLock: 'boolean',
-  flashOnMacro: 'boolean',
+  flashOnMacro: 'boolean', keyStats: 'boolean', nightMode: 'boolean', nightFrom: 'string',
+  nightTo: 'string', nightAction: 'string', nightLevel: 'number',
 };
 function settingsPatch(v) {
   const out = {};
@@ -225,7 +231,12 @@ function settingsPatch(v) {
     if (typeof v[k] !== type) continue;
     if (k === 'autoOptimizeThreshold') out[k] = int(v[k], 50, 95, 80);
     else if (k === 'idleMinutes') out[k] = int(v[k], 1, 60, 10);
-    else out[k] = v[k];
+    else if (k === 'nightLevel') out[k] = int(v[k], 5, 100, 30);
+    else if (k === 'nightFrom' || k === 'nightTo') {
+      if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v[k])) out[k] = v[k];
+    } else if (k === 'nightAction') {
+      if (v[k] === 'off' || v[k] === 'dim') out[k] = v[k];
+    } else out[k] = v[k];
   }
   return out;
 }

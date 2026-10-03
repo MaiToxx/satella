@@ -105,3 +105,27 @@ test('ambiance écran : transition douce et valeurs bornées', () => {
   assert.ok(kb.esc[0] > 0 && kb.esc[0] < 255, String(kb.esc[0]));
   e.setScreenGrid(null); // ignoré sans erreur
 });
+
+test('carte de chaleur : bleu pour les touches rares, rouge pour les plus utilisées', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'heatmap', baseColor: '#ffffff', brightness: 100 });
+  const counts = { e: 1000, a: 10 };
+  e.setHeatmap(counts);
+  const kb = e.computeKeyboard();
+  assert.ok(kb.e[0] > 200 && kb.e[2] < 30, 'la plus utilisée est rouge : ' + kb.e);
+  assert.ok(kb.a[1] > kb.a[0], 'une touche moyenne tire vers le vert/bleu : ' + kb.a);
+  assert.deepEqual(kb.q, [15, 15, 15]); // jamais pressée : couleur de base très atténuée
+  counts.q = 5; // la référence partagée est lue en direct
+  assert.notDeepEqual(e.computeKeyboard().q, [15, 15, 15]);
+});
+
+test('atténuation globale (mode nuit) appliquée à l’aperçu et au flux', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'static', baseColor: '#ffffff', brightness: 100, colors: {} });
+  e.setDeviceState('mouse', { effect: 'static', baseColor: '#ffffff', brightness: 100, colors: {} });
+  e.setDimFactor(0.5);
+  assert.deepEqual(e.computeKeyboard().esc, [128, 128, 128]);
+  assert.deepEqual(e.computeMouse().logo, [128, 128, 128]);
+  e.setDimFactor(1);
+  assert.deepEqual(e.computeKeyboard().esc, [255, 255, 255]);
+});

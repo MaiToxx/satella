@@ -46,6 +46,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 - **Vue clavier interactive** (page Clavier) : disposition QWERTY 98 touches du GS98.
   Clique sur une touche, glisse pour une sélection rectangle, Ctrl+clic pour
   ajouter/retirer, ou active le **mode pinceau** pour colorer touche par touche.
+  Annuler / rétablir (Ctrl+Z / Ctrl+Y), couleurs récentes et préréglages
+  (déplacements + flèches, rangées arc-en-ciel, dégradé, pavé numérique).
 - **Vue souris** (page Souris) : 5 zones cliquables (molette, logo, bandes).
 - **Effets natifs** (exécutés par le clavier, persistants) : Statique,
   Respiration, Vague (4 directions), Arc-en-ciel, Réactif à la frappe,
@@ -55,13 +57,16 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   Feu, Pluie, Balayage, Tourbillon, Disco, Dégradé bicolore, **Jauge système**
   (F1-F12 = processeur, rangée des chiffres = mémoire vive), **Visualiseur
   audio** (le son joué par Windows anime le clavier, une colonne par bande de
-  fréquence) et **Ambiance écran** (le clavier reprend les couleurs de l'écran
-  principal, zone par zone).
+  fréquence), **Ambiance écran** (le clavier reprend les couleurs de l'écran
+  principal, zone par zone) et **Carte de chaleur** (chaque touche du bleu au
+  rouge selon son utilisation, d'après les statistiques de frappe).
 - **Calque** : des touches fixes par-dessus n'importe quel effet (par exemple
   ZQSD en blanc sur une vague). Avec un effet animé, Satella calcule l'effet
   elle-même et le diffuse au clavier.
 - **Extinction** : bouton dans la barre latérale ou la zone de notification,
   automatique après inactivité, ou au verrouillage de la session (Windows + L).
+- **Mode nuit** : sur une plage horaire (ex. 23:00 – 07:00), les LED
+  s'éteignent ou baissent à la luminosité choisie, puis reviennent seules.
 - **Calibration** : la carte touche/LED du GS98 est calibrée d'usine dans
   l'app ; le bouton « Calibrer la carte des touches » (page Clavier) permet
   de la refaire sur un autre exemplaire (une touche s'allume, on la presse).
@@ -74,7 +79,7 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   clics/mouvements/molette souris (positions absolues valables sur tous les
   écrans), **boucles imbriquées sur plusieurs niveaux**, exécution d'une autre
   macro (les appels en cycle sont refusés), **Ouvrir** un programme, un fichier
-  ou un lien.
+  ou un lien, **Attendre une touche** (avec délai maximum facultatif).
 - **Éditeur** : glisser-déposer des étapes (y compris dans une boucle),
   annuler/rétablir (Ctrl+Z / Ctrl+Y), Ctrl+S pour sauvegarder, double-clic pour
   modifier. « Tester » joue la version affichée, même non sauvegardée.
@@ -118,6 +123,9 @@ sont gardées qu'avec ton accord.
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
   extinction des LED, activation des macros et installation d'une mise à jour
   prête.
+- **Statistiques de frappe** (option) : nombre d'appuis par touche, gardé sur
+  ce PC et remis à zéro en un clic ; les frappes des macros et turbos ne
+  comptent pas.
 - **Optimiseur mémoire** (principe MemReduct), avec nettoyage automatique au
   plus toutes les 10 minutes, qui épargne l'application au premier plan.
 - **Dépannage** (page Paramètres) : rapport de diagnostic copiable, accès aux
@@ -154,9 +162,10 @@ entretient le mode toutes les 300 ms.
 
 ## Notes
 
-- L'effet « Réactif », l'onde de choc, l'expansion de texte et l'enregistreur
-  utilisent une écoute globale du clavier (uiohook), active seulement quand
-  l'une de ces fonctions sert — uniquement locale, rien n'est envoyé sur le réseau.
+- L'effet « Réactif », l'onde de choc, l'expansion de texte, l'enregistreur,
+  l'étape « Attendre une touche » et les statistiques de frappe utilisent une
+  écoute globale du clavier (uiohook), active seulement quand l'une de ces
+  fonctions sert — uniquement locale, rien n'est envoyé sur le réseau.
 - Les données (macros, profils, éclairage) sont stockées dans
   `%APPDATA%/satella-rgb/satella-data/` (avec une copie `.bak` de la version
   précédente de chaque fichier), les journaux dans `%APPDATA%/satella-rgb/logs/`.
@@ -180,6 +189,7 @@ src/macros/snippets.js        Expansion de texte
 src/system/keyboard-layout.js Caractères selon la disposition active
 src/system/foreground.js      Application au premier plan (profils)
 src/system/idle.js            Inactivité (extinction automatique)
+src/system/schedule.js        Plages horaires (mode nuit)
 src/system/memory.js          Optimiseur mémoire
 src/system/logger.js          Journal fichier
 ui/                           Interface (HTML/CSS/JS)

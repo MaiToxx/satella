@@ -105,6 +105,8 @@
             <label>Couleur</label>
             <input type="color" id="kb-color" value="#00a8ff">
             <div class="swatches" id="kb-swatches"></div>
+            <label id="kb-recent-label" hidden>Récentes</label>
+            <div class="swatches" id="kb-recent"></div>
             <label id="kb-color2-label">Couleur 2 (dégradé)</label>
             <input type="color" id="kb-color2" value="#ff00d4">
           </div>
@@ -130,6 +132,17 @@
               <button id="kb-select-all" class="btn">Tout</button>
               <button id="kb-clear-sel" class="btn">Rien</button>
               <button id="kb-reset" class="btn danger">Réinitialiser</button>
+            </div>
+            <div class="btn-row">
+              <button id="kb-undo" class="btn small" title="Annuler (Ctrl+Z)" disabled>Annuler</button>
+              <button id="kb-redo" class="btn small" title="Rétablir (Ctrl+Y)" disabled>Rétablir</button>
+              <select id="kb-preset" title="Colore tout le clavier d'un coup">
+                <option value="">Préréglage…</option>
+                <option value="moves">Déplacements (ZQSD / WASD) + flèches</option>
+                <option value="rows">Rangées arc-en-ciel</option>
+                <option value="gradient">Dégradé couleur → couleur 2</option>
+                <option value="numpad">Pavé numérique en couleur 2</option>
+              </select>
             </div>
             <label class="check"><input type="checkbox" id="kb-paint"> Mode pinceau : cliquer colore directement</label>
             <button id="kb-calibrate" class="btn small">Calibrer la carte des touches</button>
@@ -392,6 +405,39 @@
                 rouge à l'arrêt : tu sais tout de suite si le raccourci a été pris en compte.</div>
             </div>
             <label class="switch"><input type="checkbox" id="set-flash"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Mode nuit</div>
+              <div class="setting-desc">Chaque jour sur cette plage horaire, les LED s'éteignent ou baissent
+                d'intensité, puis reprennent leur réglage.</div>
+              <div class="btn-row" style="margin-top:10px">
+                <label class="muted" style="font-size:12.5px">De</label>
+                <input type="time" id="set-night-from" value="23:00">
+                <label class="muted" style="font-size:12.5px">à</label>
+                <input type="time" id="set-night-to" value="07:00">
+                <select id="set-night-action">
+                  <option value="off">Éteindre</option>
+                  <option value="dim">Atténuer</option>
+                </select>
+                <input type="range" id="set-night-level" min="5" max="100" step="5" value="30" style="width:110px">
+                <span class="muted" id="set-night-level-val" style="font-family:var(--font-mono)">30%</span>
+              </div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-night"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Statistiques de frappe</div>
+              <div class="setting-desc">Compte les appuis par touche pour l'effet « Carte de chaleur ».
+                Seul le nombre d'appuis de chaque touche est gardé (jamais ce que tu tapes),
+                sur ce PC uniquement ; les frappes des macros et turbos ne comptent pas.</div>
+              <div class="btn-row" style="margin-top:10px">
+                <span class="muted" id="set-stats-info" style="font-size:12.5px"></span>
+                <button class="btn small" id="set-stats-reset">Remettre à zéro</button>
+              </div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-keystats"><span></span></label>
           </div>
           <div class="setting-row">
             <div>
