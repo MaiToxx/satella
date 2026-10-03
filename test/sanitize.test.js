@@ -126,3 +126,12 @@ test('import : témoins, minuteur, sauvegardes et raccourcis de l’application 
   });
   assert.deepEqual(settingsPatch({ lockColor: 'rouge', appShortcuts: null }), {});
 });
+
+test('import : plage horaire des profils validée', () => {
+  const doc = (schedule) => ({ format: 'satella', version: 1, kind: 'profile', profile: { name: 'P', schedule } });
+  assert.deepEqual(parseImport(JSON.stringify(doc({ from: '09:00', to: '18:30' })), KEYS).profile.schedule,
+    { from: '09:00', to: '18:30' });
+  for (const bad of [{ from: '9h', to: '18:00' }, { from: '10:00', to: '10:00' }, 'toujours', null]) {
+    assert.equal(parseImport(JSON.stringify(doc(bad)), KEYS).profile.schedule, null);
+  }
+});

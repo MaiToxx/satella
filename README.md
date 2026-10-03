@@ -81,7 +81,9 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 
 ### Macros (page Macros)
 - **Étapes** : touche (avec modificateurs), appui/relâchement séparés, texte libre
-  (Unicode ; les retours à la ligne deviennent des appuis sur Entrée), délais,
+  (Unicode ; les retours à la ligne deviennent des appuis sur Entrée ; variables
+  `{date}`, `{heure}`, `{jour}`, `{mois}`, `{annee}`, `{presse-papiers}` et
+  `{curseur}` pour placer le curseur à la fin), délais,
   clics/mouvements/molette souris (positions absolues valables sur tous les
   écrans), **boucles imbriquées sur plusieurs niveaux**, exécution d'une autre
   macro (les appels en cycle sont refusés), **Ouvrir** un programme, un fichier
@@ -104,8 +106,9 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   qu'elle maintenait. Les frappes envoient le scancode matériel, reconnu par
   les jeux (DirectInput, Raw Input).
 - **Expansion de texte** : une abréviation (`;mail`) se remplace par son texte
-  dans n'importe quelle application. Les caractères sont lus selon la
-  disposition active (AZERTY, accents, AltGr, touches mortes).
+  dans n'importe quelle application, avec les mêmes variables que les étapes
+  « Texte ». Les caractères sont lus selon la disposition active (AZERTY,
+  accents, AltGr, touches mortes).
 - **Mode turbo** : un raccourci démarre ou coupe la répétition d'un clic ou
   d'une touche (1 à 50 par seconde).
 - **Flash du clavier** (option) au démarrage et à l'arrêt des macros et turbos.
@@ -113,12 +116,15 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 ### Profils (page Profils)
 Un profil = éclairage complet + toutes les macros. Le profil **actif** suit les
 modifications : chaque changement d'éclairage ou de macro y est enregistré
-automatiquement. Les profils peuvent être liés à des applications (bascule
-automatique selon l'application au premier plan) ; des réglages faits hors de
-tout profil sont mis de côté (« Réglages non sauvegardés ») avant d'être
-remplacés.
+automatiquement. Bascule automatique : un profil peut être lié à des
+applications (application au premier plan) ou **programmé** sur une plage
+horaire quotidienne ; l'application liée l'emporte sur l'horaire, l'horaire sur
+le profil par défaut, et un choix manuel est gardé jusqu'au prochain
+changement. Des réglages faits hors de tout profil sont mis de côté
+(« Réglages non sauvegardés ») avant d'être remplacés.
 
-**Import / export** : un profil s'exporte en fichier `.satella` à partager ;
+**Import / export** : un profil s'exporte en fichier `.satella` à partager (un
+fichier reçu s'importe aussi en le déposant sur la fenêtre) ;
 « Tout sauvegarder » enregistre macros, profils, abréviations, turbos, réglages
 et calibration. Un fichier importé est entièrement validé (types, bornes,
 longueurs) et une sauvegarde des données actuelles est faite avant toute
@@ -126,6 +132,8 @@ restauration. Des étapes « Ouvrir » (programmes, liens) dans un fichier reçu
 sont gardées qu'avec ton accord.
 
 ### Système
+- **Palette de commandes** (Ctrl+K) : recherche instantanée des pages, macros,
+  profils, effets et actions (LED, luminosité, minuteur, sauvegarde...).
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
   extinction des LED, activation des macros et installation d'une mise à jour
   prête.
@@ -205,7 +213,8 @@ src/macros/snippets.js        Expansion de texte
 src/system/keyboard-layout.js Caractères selon la disposition active
 src/system/foreground.js      Application au premier plan (profils)
 src/system/idle.js            Inactivité (extinction automatique)
-src/system/schedule.js        Plages horaires (mode nuit)
+src/system/schedule.js        Plages horaires (mode nuit, profils programmés)
+src/shared/textvars.js        Variables du texte tapé ({date}, {curseur}...)
 src/system/locks.js           État Verr. Maj / Verr. Num (témoins)
 src/system/memory.js          Optimiseur mémoire
 src/system/logger.js          Journal fichier

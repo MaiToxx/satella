@@ -1,5 +1,5 @@
 // Pont sécurisé entre l'interface et le processus principal.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 function on(channel) {
   return (cb) => {
@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('satella', {
   openLogs: () => ipcRenderer.invoke('app:openLogs'),
   openData: () => ipcRenderer.invoke('app:openData'),
   pickFile: () => ipcRenderer.invoke('dialog:pickFile'),
+  runAction: (name) => ipcRenderer.invoke('app:action', name),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
@@ -140,5 +141,7 @@ contextBridge.exposeInMainWorld('satella', {
     exportProfile: (name) => ipcRenderer.invoke('data:export', 'profile', name),
     exportAll: () => ipcRenderer.invoke('data:export', 'backup'),
     import: () => ipcRenderer.invoke('data:import'),
+    // Fichier glissé-déposé : son chemin n'est connu que du pont
+    importFile: (file) => ipcRenderer.invoke('data:importFile', webUtils.getPathForFile(file)),
   },
 });

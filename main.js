@@ -32,7 +32,7 @@ const input = require('./src/macros/input');
 const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
 const sanitize = require('./src/shared/sanitize');
-const { inTimeWindow } = require('./src/system/schedule');
+const { inTimeWindow, autoProfileFor } = require('./src/system/schedule');
 
 // Dossier de données séparé (tests, version de développement lancée à
 // côté de la version installée) : SATELLA_USER_DATA=<dossier>
@@ -73,6 +73,7 @@ let keyStats = { counts: {}, total: 0, since: null };
 let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
+let lastAutoTarget = null;      // dernier profil choisi par la bascule automatique
 let uiPage = 'home';
 let captureKind = null; // effet capturé en cours : 'audio' | 'screen' | null
 let shortcutErrors = [];
@@ -277,8 +278,9 @@ function setupEngines() {
   store = new Store(path.join(app.getPath('userData'), 'satella-data'), { log: (m) => console.log('[données]', m) });
   ledEngine = new LedEngine();
   direct = new DirectBackend();
-  macroEngine = new MacroEngine({ globalShortcut, opener: openTargetSafely });
-  snippetEngine = new SnippetEngine();
+  const clipboardRead = () => clipboard.readText();
+  macroEngine = new MacroEngine({ globalShortcut, opener: openTargetSafely, clipboardRead });
+  snippetEngine = new SnippetEngine({ clipboardRead });
   turbos = store.read('turbos', []);
 
   // État LED sauvegardé
@@ -442,10 +444,10 @@ function applySettings() {
     autoOptTimer = setInterval(autoOptimizeTick, 60000);
   }
 
-  // --- Profils par application ---
+  // --- Profils automatiques (application au premier plan, horaires) ---
   clearInterval(fgTimer);
   fgTimer = null;
-  if (settings.appProfiles && foreground.available()) {
+  if (settings.appProfiles) {
     fgTimer = setInterval(foregroundTick, 3000);
   }
 
@@ -952,7 +954,13 @@ function backupUnsavedState() {
 
 // Applique un profil (chargement manuel ou bascule automatique)
 function applyProfile(p) {
-  if (profileSyncTimer) syncActiveProfile(); // ne pas perdre la dernière retouche
+  // Ne pas perdre la dernière retouche : elle est d'abord recopiée dans le
+  // profil actif, qui est alors relu (sinon recharger ce même profil juste
+  // après une retouche l'annulerait à l'écran mais pas dans le profil)
+  if (profileSyncTimer) {
+    syncActiveProfile();
+    p = store.read('profiles', []).find((x) => x.name === p.name) || p;
+  }
   backupUnsavedState();
   applyingProfile = true;
   try {
@@ -975,20 +983,29 @@ function loadProfileByName(name) {
   return { ledState: ledEngine.state, macros, ...profilesPayload() };
 }
 
-// Bascule de profil selon l'application au premier plan
+// Bascule automatique. Elle n'agit que quand le profil voulu change
+// (autre application, début ou fin d'une plage horaire) : un choix manuel
+// est conservé jusque-là.
 function foregroundTick() {
-  const exe = foreground.currentExe();
-  if (!exe || exe === lastFgExe) return;
-  snippetEngine.reset(); // autre fenêtre, autre saisie
-  if (exe === 'satella.exe' || exe === 'electron.exe') return; // pas de bascule en réglant Satella
-  lastFgExe = exe;
-  const profiles = store.read('profiles', []);
-  const match = profiles.find((p) => (p.apps || []).includes(exe));
-  const target = match || profiles.find((p) => p.isDefault);
-  if (!target || target.name === sessionState.activeProfile) return;
-  applyProfile(target);
+  const exe = foreground.available() ? foreground.currentExe() : null;
+  if (exe && exe !== lastFgExe) {
+    snippetEngine.reset(); // autre fenêtre, autre saisie
+    if (exe === 'satella.exe' || exe === 'electron.exe') return; // pas de bascule en réglant Satella
+    lastFgExe = exe;
+    lastAutoTarget = null;
+  }
+  const pick = autoProfileFor(store.read('profiles', []), lastFgExe);
+  if (!pick || pick.profile.name === lastAutoTarget) return;
+  lastAutoTarget = pick.profile.name;
+  if (pick.profile.name === sessionState.activeProfile) return;
+  applyProfile(pick.profile);
   send('profiles:autoApplied', {
-    name: target.name, exe: match ? exe : null, ledState: ledEngine.state, macros, ...profilesPayload(),
+    name: pick.profile.name,
+    exe: pick.reason === 'app' ? lastFgExe : null,
+    schedule: pick.reason === 'schedule' ? pick.profile.schedule : null,
+    ledState: ledEngine.state,
+    macros,
+    ...profilesPayload(),
   });
 }
 
@@ -1235,10 +1252,9 @@ function uniqueProfileName(profiles, name) {
   }
 }
 
-// `file` : fichier imposé (sauvegarde automatique, déjà de confiance) ;
-// sinon l'utilisateur choisit le fichier
-async function importData(file = null) {
-  const trusted = !!file;
+// `file` : fichier imposé (glissé-déposé, ou sauvegarde automatique :
+// `trusted`, déjà de confiance) ; sinon l'utilisateur choisit le fichier
+async function importData({ file = null, trusted = false } = {}) {
   if (!file) {
     const res = await dialog.showOpenDialog(win, {
       title: 'Importer un fichier Satella',
@@ -1583,6 +1599,14 @@ function setupIpc() {
     return keyStats;
   });
 
+  // Commandes de l'application (palette de commandes de l'interface)
+  ipcMain.handle('app:action', (e, name) => {
+    const def = Object.prototype.hasOwnProperty.call(APP_ACTIONS, name) ? APP_ACTIONS[name] : null;
+    if (!def) return false;
+    def.run();
+    return true;
+  });
+
   // ---- Minuteur ----
   ipcMain.handle('timer:get', () => timerPayload());
   ipcMain.handle('timer:start', (e, minutes) => startTimer(minutes));
@@ -1602,7 +1626,7 @@ function setupIpc() {
     if (!BACKUP_RE.test(String(name)) || !listBackups().some((b) => b.name === name)) {
       return { ok: false, error: 'sauvegarde introuvable' };
     }
-    return importData(path.join(backupDir(), name));
+    return importData({ file: path.join(backupDir(), name), trusted: true });
   });
 
   // ---- Optimiseur mémoire ----
@@ -1638,6 +1662,7 @@ function setupIpc() {
       macros,
       apps: previous.apps || [],
       isDefault: !!previous.isDefault,
+      schedule: previous.schedule || null,
     });
     store.write('profiles', profiles);
     sessionState = { activeProfile: name, dirty: false };
@@ -1676,8 +1701,10 @@ function setupIpc() {
       profiles.forEach((x) => { x.isDefault = false; });
       p.isDefault = !!meta.isDefault;
     }
+    if (meta.schedule !== undefined) p.schedule = sanitize.schedule(meta.schedule);
     store.write('profiles', profiles);
     lastFgExe = ''; // réévaluer la bascule avec les nouvelles règles
+    lastAutoTarget = null;
     return profilesPayload();
   });
   ipcMain.handle('profiles:remove', (e, name) => {
@@ -1696,6 +1723,13 @@ function setupIpc() {
   // ---- Import / export ----
   ipcMain.handle('data:export', (e, kind, name) => exportData(kind === 'profile' ? 'profile' : 'backup', name));
   ipcMain.handle('data:import', () => importData());
+  // Fichier glissé-déposé sur la fenêtre
+  ipcMain.handle('data:importFile', (e, file) => {
+    if (typeof file !== 'string' || !/\.(satella|json)$/i.test(file) || !path.isAbsolute(file)) {
+      return { ok: false, error: 'seuls les fichiers .satella peuvent être importés' };
+    }
+    return importData({ file });
+  });
 
   // Choix d'un programme ou d'un fichier (étape « Ouvrir »)
   ipcMain.handle('dialog:pickFile', async () => {

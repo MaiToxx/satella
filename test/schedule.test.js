@@ -26,3 +26,17 @@ test('valeurs invalides ou plage vide : jamais active', () => {
   assert.equal(toMinutes('7:05'), 425);
   assert.equal(toMinutes('12:60'), null);
 });
+
+test('profil automatique : application, puis horaire, puis profil par défaut', () => {
+  const { autoProfileFor } = require('../src/system/schedule');
+  const profiles = [
+    { name: 'Défaut', isDefault: true },
+    { name: 'Travail', schedule: { from: '09:00', to: '18:00' } },
+    { name: 'Jeu', apps: ['jeu.exe'] },
+  ];
+  const at = (h) => new Date(2026, 9, 3, h, 0);
+  assert.deepEqual(autoProfileFor(profiles, 'jeu.exe', at(10)), { profile: profiles[2], reason: 'app' });
+  assert.deepEqual(autoProfileFor(profiles, 'notepad.exe', at(10)), { profile: profiles[1], reason: 'schedule' });
+  assert.deepEqual(autoProfileFor(profiles, null, at(20)), { profile: profiles[0], reason: 'default' });
+  assert.equal(autoProfileFor([{ name: 'X' }], null, at(10)), null);
+});

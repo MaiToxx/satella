@@ -166,3 +166,12 @@ test('étape « Attendre une touche » sans écoute disponible : erreur claire',
   await engine.play('w', { id: 'w', steps: [{ type: 'waitKey', key: 'a' }] });
   assert.match(errors[0], /écoute du clavier indisponible/);
 });
+
+test('étape « Texte » : variables remplacées, curseur replacé', async () => {
+  const injector = fakeInput();
+  const engine = new MacroEngine({ globalShortcut: fakeShortcuts(), injector, clipboardRead: () => 'XY' });
+  engine.setMacros([{ id: 'a', enabled: true, steps: [{ type: 'text', value: '({presse-papiers}{curseur})', gapMs: 0 }] }]);
+  await engine.play('a');
+  assert.ok(injector.log.includes('lines "(XY)"'), injector.log.join('|'));
+  assert.equal(injector.log.filter((l) => l === 'tap left').length, 1);
+});

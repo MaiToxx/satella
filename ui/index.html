@@ -15,6 +15,10 @@
         <div class="brand-name">SATELLA</div>
         <div class="brand-sub">RGB + MACROS</div>
       </div>
+      <button class="palette-open" id="palette-open" title="Palette de commandes">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        Rechercher… <kbd>Ctrl K</kbd>
+      </button>
       <nav>
         <button class="nav-btn active" data-page="home">
           <svg class="icon" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
@@ -237,6 +241,10 @@
             Tape une abréviation n'importe où (au moins 2 caractères, par exemple ;mail)
             et elle se remplace aussitôt par ton texte. Le point-virgule en préfixe évite
             les remplacements accidentels.</p>
+          <p class="muted" style="margin-bottom:12px;font-size:12px">
+            Variables : <code>{date}</code> <code>{heure}</code> <code>{jour}</code> <code>{mois}</code>
+            <code>{annee}</code> <code>{presse-papiers}</code> (texte copié) et <code>{curseur}</code>
+            (le curseur s'y place à la fin, par exemple <code>&lt;b&gt;{curseur}&lt;/b&gt;</code>).</p>
           <div id="snippet-list"></div>
           <button class="btn small" id="snippet-add" style="margin-top:10px">Ajouter une abréviation</button>
         </div>
@@ -391,9 +399,10 @@
           </div>
           <div class="setting-row">
             <div>
-              <div class="setting-name">Profils par application</div>
+              <div class="setting-name">Profils automatiques</div>
               <div class="setting-desc">Bascule automatiquement le profil (éclairage + macros) selon
-                l'application au premier plan. Les applications se lient à un profil sur la page Profils.</div>
+                l'application au premier plan ou l'heure de la journée. Applications et horaires se
+                règlent sur la page Profils.</div>
             </div>
             <label class="switch"><input type="checkbox" id="set-appprofiles"><span></span></label>
           </div>
@@ -531,6 +540,18 @@
   <div id="modal-backdrop" hidden>
     <div id="modal" class="panel"></div>
   </div>
+
+  <!-- Palette de commandes (Ctrl+K) -->
+  <div id="palette-backdrop" hidden>
+    <div id="palette" class="panel" role="dialog" aria-label="Palette de commandes">
+      <input type="text" id="palette-input" autocomplete="off" spellcheck="false"
+        placeholder="Page, macro, profil, effet, action…">
+      <div id="palette-list" role="listbox"></div>
+      <div class="palette-foot">↑ ↓ pour choisir · Entrée pour lancer · Échap pour fermer</div>
+    </div>
+  </div>
+
+  <div id="drop-overlay" hidden><div>Dépose le fichier .satella pour l'importer</div></div>
 
   <div id="toast" hidden></div>
 

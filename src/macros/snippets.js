@@ -10,6 +10,7 @@
 const input = require('./input');
 const { VK } = require('./keys');
 const layout = require('../system/keyboard-layout');
+const textvars = require('../shared/textvars');
 
 // Nom de touche Satella -> caractère tapé (repli QWERTY, sans majuscules :
 // la correspondance des abréviations ignore la casse)
@@ -31,7 +32,9 @@ const MODIFIERS = new Set(['lshift', 'rshift', 'lctrl', 'rctrl', 'lalt', 'ralt',
   'lwin', 'rwin', 'capslock', 'numlock', 'fn']);
 
 class SnippetEngine {
-  constructor({ translate = layout.translate, combineDead = layout.combineDead, typer = input } = {}) {
+  constructor({
+    translate = layout.translate, combineDead = layout.combineDead, typer = input, clipboardRead = () => '',
+  } = {}) {
     this.snippets = [];
     this.buffer = '';
     this.dead = null;      // touche morte en attente (« ^ » avant « e »)
@@ -39,6 +42,7 @@ class SnippetEngine {
     this.translate = translate;
     this.combineDead = combineDead;
     this.typer = typer;
+    this.clipboardRead = clipboardRead; // variable {presse-papiers}
   }
 
   setSnippets(list) {
@@ -117,7 +121,9 @@ class SnippetEngine {
       try {
         const count = [...snippet.abbr].length;
         for (let i = 0; i < count; i++) this.typer.keyTap('backspace');
-        this.typer.typeTextLines(String(snippet.text || ''));
+        const { text, back } = textvars.expand(snippet.text, { clipboard: this.clipboardRead });
+        this.typer.typeTextLines(text);
+        for (let i = 0; i < back; i++) this.typer.keyTap('left');
       } catch { /* application fermée entre-temps */ }
       // Les frappes injectées repassent par l'écoute globale : on attend
       // qu'elles soient écoulées avant de réécouter
