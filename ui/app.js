@@ -13,13 +13,20 @@ let MACROS = [];
 let KEY_NAMES = [];
 let KEY_LABELS = {};
 let CAPS = {};
+let SHORTCUT_ERRORS = [];
+let ACTIVE_PROFILE = null;
+let DIMMED = false;
 
 const kbSelection = new Set();
 let mouseSelection = null;
 let currentMacroId = null;
 let recording = false;
 let recordedSteps = [];
+const recordOpts = { mouse: true, clickPositions: false, moves: false };
 let lastFrame = null;
+
+// Version sauvegardée de chaque macro (détection des modifications en cours)
+const SAVED = new Map();
 
 const EFFECTS = [
   ['static', 'Statique'],
@@ -35,6 +42,8 @@ const EFFECTS = [
   ['spiral', 'Tourbillon'],
   ['disco', 'Disco'],
   ['gradient', 'Dégradé'],
+  ['sysmon', 'Jauge système'],
+  ['audio', 'Visualiseur audio'],
   ['off', 'Éteint'],
 ];
 const MOUSE_EFFECTS = [
@@ -45,6 +54,11 @@ const MOUSE_EFFECTS = [
   ['sparkle', 'Étincelles'],
   ['off', 'Éteint'],
 ];
+const EFFECT_HINTS = {
+  sysmon: 'F1 à F12 : charge du processeur. Rangée des chiffres : mémoire vive. Les autres touches gardent la couleur choisie, atténuée.',
+  audio: 'Le son joué par Windows anime le clavier : une colonne par bande de fréquence. La couleur 2 colore le haut des colonnes.',
+};
+const COLOR2_EFFECTS = ['gradient', 'audio'];
 
 const SWATCH_COLORS = [
   '#ff0033', '#ff7a00', '#ffd500', '#2ee88a', '#00a8ff',
@@ -59,8 +73,28 @@ function toast(msg, ms = 2500) {
   t._timer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+// Échappement HTML de tout texte saisi ou importé avant insertion dans
+// innerHTML (noms, textes de macros, abréviations, noms USB...)
+function esc(v) {
+  return String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+const clone = (v) => JSON.parse(JSON.stringify(v));
 function rgbCss(rgb) { return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; }
 function uid() { return 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('fr-FR');
+}
+
+// Forme normalisée d'un raccourci (« Shift+Ctrl+A » = « Ctrl+Shift+A »)
+function normAccel(a) {
+  const parts = String(a || '').split('+').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const key = parts.pop();
+  return [...new Set(parts)].sort().concat(key).join('+');
+}
 
 /* Icônes SVG au trait (aucun emoji dans l'interface) */
 const ICON_PATHS = {
@@ -83,6 +117,10 @@ const ICON_PATHS = {
   move: '<path d="M12 3v18M3 12h18M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2"/>',
   wheel: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8"/>',
   loop: '<path d="M20 8a8 8 0 1 0 2 6"/><path d="M22 3v5h-5"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
+  grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
+  warn: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
 };
 function svg(name, cls = 'icon sm') {
   return `<svg class="${cls}" viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`;
@@ -103,12 +141,49 @@ function setAccent() {
   root.setProperty('--accent-text', lum > 150 ? '#0a0b0e' : '#ffffff');
 }
 
+/* Petite fenêtre de saisie (Electron ne gère pas window.prompt) */
+function askText({ title, label, value = '', ok = 'Valider' }) {
+  return new Promise((resolve) => {
+    const modal = $('#modal');
+    const backdrop = $('#modal-backdrop');
+    modal.innerHTML = `
+      <h3>${esc(title)}</h3>
+      <label class="muted" style="font-size:13px">${esc(label)}</label>
+      <input type="text" id="ask-input" maxlength="60" style="width:100%;margin:8px 0 14px">
+      <div class="btn-row">
+        <button class="btn primary" id="ask-ok">${esc(ok)}</button>
+        <button class="btn" id="ask-cancel">Annuler</button>
+      </div>`;
+    const inputEl = $('#ask-input');
+    inputEl.value = value;
+    backdrop.hidden = false;
+    inputEl.focus();
+    inputEl.select();
+    const done = (result) => {
+      backdrop.hidden = true;
+      backdrop.removeEventListener('modal-dismiss', onDismiss);
+      resolve(result);
+    };
+    const onDismiss = () => resolve(null);
+    backdrop.addEventListener('modal-dismiss', onDismiss, { once: true });
+    $('#ask-ok').addEventListener('click', () => done(inputEl.value.trim()));
+    $('#ask-cancel').addEventListener('click', () => done(null));
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') done(inputEl.value.trim());
+      if (e.key === 'Escape') done(null);
+    });
+  });
+}
+
 /* ================= Navigation ================= */
+let currentPage = 'home';
 function showPage(name) {
+  currentPage = name;
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
   $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + name));
   accentDevice = name === 'mouse' ? 'mouse' : 'keyboard';
   setAccent();
+  window.satella.setPage(name); // l'aperçu n'est calculé que s'il est affiché
   // La mémoire n'est interrogée que sur les pages qui l'affichent
   clearInterval(memTimer);
   memTimer = null;
@@ -118,6 +193,8 @@ function showPage(name) {
   } else if (name === 'settings') {
     refreshFootprint();
     syncStartupState();
+  } else if (name === 'profiles' && pendingProfiles) {
+    renderProfiles(pendingProfiles);
   }
 }
 $$('.nav-btn').forEach((b) => b.addEventListener('click', () => showPage(b.dataset.page)));
@@ -174,6 +251,7 @@ window.satella.onUpdateError(({ message }) => {
 });
 
 /* ================= Clavier ================= */
+let keyEls = [];
 function buildKeyboard() {
   const board = $('#kb-board');
   board.style.width = LAYOUT.bounds.w * U + 'px';
@@ -187,10 +265,11 @@ function buildKeyboard() {
     el.style.top = key.y * U + 2 + 'px';
     el.style.width = key.w * U - 4 + 'px';
     el.style.height = key.h * U - 4 + 'px';
-    el.innerHTML = `<div class="led"></div><span class="lbl">${key.label}</span>`;
+    el.innerHTML = `<div class="led"></div><span class="lbl">${esc(key.label)}</span>`;
     el.addEventListener('click', (e) => onKeyClick(key.id, e));
     board.appendChild(el);
   }
+  keyEls = $$('.kb-key');
 }
 
 function onKeyClick(id, e) {
@@ -209,11 +288,18 @@ function onKeyClick(id, e) {
 }
 
 function refreshSelection() {
-  $$('.kb-key').forEach((el) => {
+  keyEls.forEach((el) => {
     el.classList.toggle('selected', kbSelection.has(el.dataset.id));
     setKeyVisual(el, lastFrame && lastFrame.keyboard[el.dataset.id]);
   });
   $('#kb-sel-count').textContent = kbSelection.size;
+}
+
+// Touches du calque (fixes par-dessus l'effet) : repère visuel
+function refreshOverlayMarks() {
+  const overlay = (STATE && STATE.keyboard.overlay) || {};
+  keyEls.forEach((el) => el.classList.toggle('in-overlay', !!overlay[el.dataset.id]));
+  $('#kb-overlay-count').textContent = Object.keys(overlay).length;
 }
 
 /* Sélection rectangle (marquee) */
@@ -314,7 +400,10 @@ function buildToolbars() {
   bindSlider('#mouse-bright', '#mouse-bright-val', 'mouse', 'brightness');
   bindSlider('#mouse-speed', '#mouse-speed-val', 'mouse', 'speed');
 
-  $('#kb-dir').addEventListener('change', (e) => window.satella.led.set('keyboard', { direction: e.target.value }));
+  $('#kb-dir').addEventListener('change', (e) => {
+    STATE.keyboard.direction = e.target.value;
+    window.satella.led.set('keyboard', { direction: e.target.value });
+  });
 
   $('#kb-apply').addEventListener('click', () => {
     if (!kbSelection.size) return toast('Sélectionne d’abord des touches.');
@@ -331,6 +420,26 @@ function buildToolbars() {
   });
   $('#kb-clear-sel').addEventListener('click', () => { kbSelection.clear(); refreshSelection(); });
   $('#kb-reset').addEventListener('click', () => window.satella.led.clearKeys('keyboard'));
+
+  // Calque : les touches sélectionnées gardent leur couleur par-dessus l'effet
+  $('#kb-overlay-add').addEventListener('click', () => {
+    if (!kbSelection.size) return toast('Sélectionne d’abord des touches.');
+    const color = $('#kb-color').value;
+    const map = {};
+    for (const id of kbSelection) map[id] = color;
+    window.satella.led.setOverlay('keyboard', map);
+    STATE.keyboard.overlay = { ...(STATE.keyboard.overlay || {}), ...map };
+    refreshOverlayMarks();
+    toast(`${kbSelection.size} touche(s) fixée(s) par-dessus l'effet.`);
+  });
+  $('#kb-overlay-remove').addEventListener('click', () => {
+    const overlay = { ...(STATE.keyboard.overlay || {}) };
+    const ids = kbSelection.size ? [...kbSelection] : Object.keys(overlay);
+    window.satella.led.removeOverlay('keyboard', ids);
+    for (const id of ids) delete overlay[id];
+    STATE.keyboard.overlay = overlay;
+    refreshOverlayMarks();
+  });
 
   $('#mouse-apply').addEventListener('click', () => {
     if (!mouseSelection) return toast('Sélectionne d’abord une zone.');
@@ -352,15 +461,17 @@ function bindSlider(sel, valSel, device, prop) {
   const input = $(sel);
   input.addEventListener('input', () => {
     $(valSel).textContent = input.value + '%';
+    STATE[device][prop] = +input.value;
     window.satella.led.set(device, { [prop]: +input.value });
   });
 }
 
 function syncToolbars() {
-  $$('#kb-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === STATE.keyboard.effect));
+  const fx = STATE.keyboard.effect;
+  $$('#kb-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === fx));
   $$('#mouse-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === STATE.mouse.effect));
-  $('#kb-dir-group').style.display = STATE.keyboard.effect === 'wave' ? '' : 'none';
-  const showC2 = STATE.keyboard.effect === 'gradient' ? '' : 'none';
+  $('#kb-dir-group').style.display = fx === 'wave' ? '' : 'none';
+  const showC2 = COLOR2_EFFECTS.includes(fx) ? '' : 'none';
   $('#kb-color2-label').style.display = showC2;
   $('#kb-color2').style.display = showC2;
   $('#kb-color2').value = STATE.keyboard.color2 || '#ff00d4';
@@ -375,6 +486,10 @@ function syncToolbars() {
   $('#mouse-speed').value = STATE.mouse.speed;
   $('#mouse-speed-val').textContent = STATE.mouse.speed + '%';
   $('#kb-dir').value = STATE.keyboard.direction;
+  const hint = EFFECT_HINTS[fx];
+  $('#kb-fx-hint').textContent = hint || '';
+  $('#kb-fx-hint').hidden = !hint;
+  refreshOverlayMarks();
   setAccent();
 }
 
@@ -425,34 +540,118 @@ function setKeyVisual(el, rgb) {
 
 function applyFrame(frame) {
   lastFrame = frame;
-  $$('.kb-key').forEach((el) => {
-    const rgb = frame.keyboard[el.dataset.id];
-    if (!rgb) return;
-    el.firstElementChild.style.background = rgbCss(rgb);
-    setKeyVisual(el, rgb);
-  });
-  // Souris
-  $$('.mouse-zone').forEach((el) => {
-    const rgb = frame.mouse[el.dataset.zone];
-    if (rgb && el.dataset.zone) {
-      el.style.fill = rgbCss(rgb);
-      el.style.filter = `drop-shadow(0 0 6px ${rgbCss(rgb)})`;
+  if (currentPage === 'keyboard') {
+    for (const el of keyEls) {
+      const rgb = frame.keyboard[el.dataset.id];
+      if (!rgb) continue;
+      el.firstElementChild.style.background = rgbCss(rgb);
+      setKeyVisual(el, rgb);
     }
-  });
-  // Mini-aperçus accueil
-  const kbSpans = $('#home-kb-preview').children;
-  const keys = LAYOUT.keyboard;
-  for (let i = 0; i < kbSpans.length; i++) {
-    const key = keys[Math.floor((i / kbSpans.length) * keys.length)];
-    const rgb = frame.keyboard[key.id];
-    if (rgb) kbSpans[i].style.background = rgbCss(rgb);
   }
-  const msSpans = $('#home-mouse-preview').children;
-  LAYOUT.mouse.forEach((z, i) => {
-    const rgb = frame.mouse[z.id];
-    if (rgb && msSpans[i]) msSpans[i].style.background = rgbCss(rgb);
-  });
+  if (currentPage === 'mouse') {
+    $$('.mouse-zone').forEach((el) => {
+      const rgb = frame.mouse[el.dataset.zone];
+      if (rgb && el.dataset.zone) {
+        el.style.fill = rgbCss(rgb);
+        el.style.filter = `drop-shadow(0 0 6px ${rgbCss(rgb)})`;
+      }
+    });
+  }
+  if (currentPage === 'home') {
+    const kbSpans = $('#home-kb-preview').children;
+    const keysList = LAYOUT.keyboard;
+    for (let i = 0; i < kbSpans.length; i++) {
+      const key = keysList[Math.floor((i / kbSpans.length) * keysList.length)];
+      const rgb = frame.keyboard[key.id];
+      if (rgb) kbSpans[i].style.background = rgbCss(rgb);
+    }
+    const msSpans = $('#home-mouse-preview').children;
+    LAYOUT.mouse.forEach((z, i) => {
+      const rgb = frame.mouse[z.id];
+      if (rgb && msSpans[i]) msSpans[i].style.background = rgbCss(rgb);
+    });
+  }
 }
+
+/* ================= Visualiseur audio ================= */
+// Capture du son de Windows (boucle de sortie, accordée par le processus
+// principal) analysée en Web Audio ; 16 bandes envoyées ~30 fois/s.
+const audioViz = (() => {
+  let stream = null;
+  let ctx = null;
+  let analyser = null;
+  let data = null;
+  let timer = null;
+  let starting = false;
+  let warned = false;
+
+  function report(msg) {
+    window.satella.audio.reportError(msg);
+    if (!warned) toast('Visualiseur audio : ' + msg, 5000);
+    warned = true;
+  }
+
+  async function start() {
+    if (stream || starting) return;
+    starting = true;
+    try {
+      // La vidéo est imposée par l'API : réduite au minimum et désactivée
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: { width: 320, height: 180, frameRate: 1 },
+      });
+    } catch (err) {
+      starting = false;
+      report('capture du son impossible (' + err.message + ')');
+      return;
+    }
+    starting = false;
+    stream.getVideoTracks().forEach((t) => { t.enabled = false; });
+    if (!stream.getAudioTracks().length) {
+      report('aucun son capturé (disponible sous Windows uniquement)');
+      stop();
+      return;
+    }
+    warned = false;
+    ctx = new AudioContext();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.55;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    data = new Uint8Array(analyser.frequencyBinCount);
+    timer = setInterval(tick, 33);
+  }
+
+  function tick() {
+    analyser.getByteFrequencyData(data);
+    const nyquist = ctx.sampleRate / 2;
+    const bands = [];
+    // Bandes logarithmiques de 40 Hz à 16 kHz
+    for (let i = 0; i < 16; i++) {
+      const f0 = 40 * Math.pow(400, i / 16);
+      const f1 = 40 * Math.pow(400, (i + 1) / 16);
+      const b0 = Math.floor((f0 / nyquist) * data.length);
+      const b1 = Math.max(b0 + 1, Math.ceil((f1 / nyquist) * data.length));
+      let max = 0;
+      for (let b = b0; b < b1 && b < data.length; b++) if (data[b] > max) max = data[b];
+      bands.push(Math.max(0, Math.min(1, (max / 255 - 0.2) / 0.7)));
+    }
+    window.satella.audio.sendBands(bands);
+  }
+
+  function stop() {
+    clearInterval(timer);
+    timer = null;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    if (ctx) ctx.close().catch(() => {});
+    ctx = null;
+  }
+
+  return { start, stop };
+})();
+window.__satellaAudio = audioViz;
+window.satella.audio.onStop(() => audioViz.stop());
 
 /* ================= Macros ================= */
 const STEP_META = {
@@ -470,9 +669,11 @@ const STEP_META = {
   runMacro: { icon: 'play', name: 'Exécuter macro' },
 };
 const BUTTON_LABELS = { left: 'gauche', right: 'droit', middle: 'molette', x1: 'latéral 1', x2: 'latéral 2' };
+const MAX_LOOP_DEPTH = 8;
 
 function keyLabel(k) { return KEY_LABELS[k] || (k || '?').toUpperCase(); }
 
+// Description en texte brut (échappée à l'insertion)
 function stepDesc(s) {
   switch (s.type) {
     case 'keyTap': {
@@ -481,13 +682,16 @@ function stepDesc(s) {
     }
     case 'keyDown': return 'Maintenir ' + keyLabel(s.key);
     case 'keyUp': return 'Relâcher ' + keyLabel(s.key);
-    case 'text': return `« ${String(s.value || '').slice(0, 40)}${(s.value || '').length > 40 ? '…' : ''} »`;
+    case 'text': {
+      const v = String(s.value || '').replace(/\r?\n/g, ' ⏎ ');
+      return `« ${v.slice(0, 40)}${v.length > 40 ? '…' : ''} »`;
+    }
     case 'delay': return `${s.ms} ms`;
     case 'mouseClick': return `Clic ${BUTTON_LABELS[s.button] || s.button}${s.count > 1 ? ' ×' + s.count : ''}`;
     case 'mouseDown': return `Maintenir bouton ${BUTTON_LABELS[s.button] || s.button}`;
     case 'mouseUp': return `Relâcher bouton ${BUTTON_LABELS[s.button] || s.button}`;
     case 'mouseMove': return s.relative ? `Déplacer de (${s.x}, ${s.y})` : `Aller à (${s.x}, ${s.y})`;
-    case 'mouseWheel': return `Molette ${s.delta > 0 ? '↑' : '↓'} (${Math.abs(s.delta / 120)} cran(s))`;
+    case 'mouseWheel': return `Molette ${s.horizontal ? (s.delta > 0 ? '→' : '←') : (s.delta > 0 ? '↑' : '↓')} (${Math.abs(s.delta / 120)} cran(s))`;
     case 'loop': return `Répéter ${s.count} fois (${(s.steps || []).length} étape(s))`;
     case 'runMacro': {
       const m = MACROS.find((x) => x.id === s.macroId);
@@ -497,7 +701,34 @@ function stepDesc(s) {
   }
 }
 
+function countSteps(list) {
+  return (list || []).reduce((n, s) => n + 1 + (s.type === 'loop' ? countSteps(s.steps) : 0), 0);
+}
+
 function currentMacro() { return MACROS.find((m) => m.id === currentMacroId); }
+function isUnsaved(m) { return SAVED.get(m.id) !== JSON.stringify(m); }
+function markSaved(list) {
+  SAVED.clear();
+  for (const m of list) SAVED.set(m.id, JSON.stringify(m));
+}
+function shortcutError(kind, id) {
+  return SHORTCUT_ERRORS.find((e) => e.kind === kind && e.id === id);
+}
+
+// Autre macro ou turbo utilisant déjà ce raccourci (avertissement)
+function accelConflict(accel, self) {
+  const k = normAccel(accel);
+  const m = MACROS.find((x) => x !== self && x.enabled && x.trigger && normAccel(x.trigger.accelerator) === k);
+  if (m) return `la macro « ${m.name} »`;
+  const ti = TURBOS.findIndex((t) => t !== self && t.enabled && t.accelerator && normAccel(t.accelerator) === k);
+  if (ti >= 0) return `le turbo n°${ti + 1}`;
+  return null;
+}
+
+async function playMacro(m, draft) {
+  const res = await window.satella.macros.play(m.id, draft ? clone(m) : null);
+  if (res && !res.ok) toast('Lecture impossible : ' + res.error, 4000);
+}
 
 function renderMacroList() {
   const list = $('#macro-list');
@@ -508,15 +739,17 @@ function renderMacroList() {
   }
   for (const m of MACROS) {
     const el = document.createElement('div');
+    const err = shortcutError('macro', m.id);
     el.className = 'macro-item' + (m.id === currentMacroId ? ' active' : '') + (m.enabled ? '' : ' disabled');
     el.dataset.id = m.id;
     el.innerHTML = `
-      <span class="m-name">${m.name}</span>
-      ${m.trigger && m.trigger.accelerator ? `<span class="m-trigger">${m.trigger.accelerator}</span>` : ''}
+      <span class="m-name">${esc(m.name)}${isUnsaved(m) ? ' <span class="m-unsaved" title="Modifications non sauvegardées">●</span>' : ''}</span>
+      ${err ? `<span class="m-warn" title="Raccourci inactif : ${esc(err.reason)}">${svg('warn')}</span>` : ''}
+      ${m.trigger && m.trigger.accelerator ? `<span class="m-trigger${err ? ' bad' : ''}">${esc(m.trigger.accelerator)}</span>` : ''}
       <button class="icon-btn m-play" title="Lire">${svg('play')}</button>`;
     el.addEventListener('click', (e) => {
       if (e.target.closest('.m-play')) {
-        window.satella.macros.play(m.id);
+        playMacro(m, isUnsaved(m));
         return;
       }
       currentMacroId = m.id;
@@ -527,6 +760,52 @@ function renderMacroList() {
   }
 }
 
+/* ---- Annuler / rétablir (étapes de la macro en cours) ---- */
+const history = { id: null, past: [], future: [] };
+
+function resetHistory(id) {
+  history.id = id;
+  history.past = [];
+  history.future = [];
+}
+
+function pushHistory() {
+  const m = currentMacro();
+  if (!m) return;
+  if (history.id !== m.id) resetHistory(m.id);
+  history.past.push(JSON.stringify(m.steps || []));
+  if (history.past.length > 100) history.past.shift();
+  history.future = [];
+}
+
+function undoSteps(redo = false) {
+  const m = currentMacro();
+  if (!m || history.id !== m.id) return;
+  const from = redo ? history.future : history.past;
+  const to = redo ? history.past : history.future;
+  if (!from.length) return;
+  to.push(JSON.stringify(m.steps || []));
+  m.steps = JSON.parse(from.pop());
+  renderSteps();
+  renderMacroList();
+}
+
+function updateHistoryButtons() {
+  const u = $('#me-undo');
+  const r = $('#me-redo');
+  if (u) u.disabled = !history.past.length;
+  if (r) r.disabled = !history.future.length;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (currentPage !== 'macros' || !currentMacro() || !$('#modal-backdrop').hidden) return;
+  if (e.target.closest('input, textarea, select')) return;
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey && k === 'z' && !e.shiftKey) { e.preventDefault(); undoSteps(false); }
+  else if (e.ctrlKey && (k === 'y' || (k === 'z' && e.shiftKey))) { e.preventDefault(); undoSteps(true); }
+  else if (e.ctrlKey && k === 's') { e.preventDefault(); saveCurrentMacro(); }
+});
+
 function renderMacroEditor() {
   const ed = $('#macro-editor');
   const m = currentMacro();
@@ -534,18 +813,22 @@ function renderMacroEditor() {
     ed.innerHTML = '<p class="muted center">Sélectionne une macro ou crées-en une nouvelle.</p>';
     return;
   }
-  const opts = m.options || {};
+  if (history.id !== m.id) resetHistory(m.id);
+  if (!m.options) m.options = {};
+  const opts = m.options;
+  const err = shortcutError('macro', m.id);
   ed.innerHTML = `
     <div class="form-grid">
       <label>Nom</label>
-      <input type="text" id="me-name" value="${m.name.replace(/"/g, '&quot;')}">
+      <input type="text" id="me-name" maxlength="100" value="${esc(m.name)}">
       <label>Activée</label>
       <label class="check"><input type="checkbox" id="me-enabled" ${m.enabled ? 'checked' : ''}> la macro peut être déclenchée</label>
       <label>Déclencheur</label>
       <div class="btn-row">
         <input type="text" readonly class="trigger-input" id="me-trigger"
-          value="${(m.trigger && m.trigger.accelerator) || ''}" placeholder="Clique puis presse un raccourci…">
+          value="${esc((m.trigger && m.trigger.accelerator) || '')}" placeholder="Clique puis presse un raccourci…">
         <button class="btn small" id="me-trigger-clear">Effacer</button>
+        ${err ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} Raccourci inactif : ${esc(err.reason)}.</span>` : ''}
         <span class="muted" style="font-size:11.5px;flex-basis:100%">
           Toute touche est acceptée, seule ou combinée. Attention : une touche
           seule est réservée aux macros dans tout Windows tant que Satella
@@ -553,116 +836,230 @@ function renderMacroEditor() {
       </div>
       <label>Répétitions</label>
       <div class="btn-row">
-        <input type="number" id="me-repeat" min="1" max="9999" value="${opts.repeat || 1}" style="width:80px" ${opts.loopInfinite ? 'disabled' : ''}>
+        <input type="number" id="me-repeat" min="1" max="9999" value="${+opts.repeat || 1}" style="width:80px" ${opts.loopInfinite ? 'disabled' : ''}>
         <label class="check"><input type="checkbox" id="me-infinite" ${opts.loopInfinite ? 'checked' : ''}> en boucle jusqu'à re-déclenchement</label>
       </div>
       <label>Délai entre répét.</label>
       <div class="btn-row">
-        <input type="number" id="me-repeat-delay" min="0" max="600000" value="${opts.repeatDelayMs || 0}" style="width:100px"> ms
+        <input type="number" id="me-repeat-delay" min="0" max="600000" value="${+opts.repeatDelayMs || 0}" style="width:100px"> ms
       </div>
-      <label>Vitesse ×<span id="me-speed-val">${opts.speed || 1}</span></label>
-      <input type="range" id="me-speed" min="0.25" max="4" step="0.25" value="${opts.speed || 1}">
+      <label>Vitesse ×<span id="me-speed-val">${+opts.speed || 1}</span></label>
+      <input type="range" id="me-speed" min="0.25" max="4" step="0.25" value="${+opts.speed || 1}">
+      <label>Durée d'appui</label>
+      <div class="btn-row">
+        <input type="number" id="me-hold" min="0" max="1000" value="${+opts.holdMs || 0}" style="width:80px"> ms
+        <span class="muted" style="font-size:11.5px">maintien de chaque touche et clic ; 10 à 30 ms aident certains jeux</span>
+      </div>
+      <label>Variation aléatoire</label>
+      <div class="btn-row">
+        <input type="range" id="me-jitter" min="0" max="50" step="5" value="${+opts.jitter || 0}" style="width:140px">
+        <span class="muted" id="me-jitter-val" style="font-family:var(--font-mono);font-size:12px">±${+opts.jitter || 0}%</span>
+        <span class="muted" style="font-size:11.5px">des délais (rythme moins mécanique)</span>
+      </div>
     </div>
 
     <div class="btn-row" style="margin-bottom:6px">
-      <button class="btn primary" id="me-save">${svg('save')} Sauvegarder</button>
-      <button class="btn" id="me-play">${svg('play')} Tester</button>
+      <button class="btn primary" id="me-save" title="Ctrl+S">${svg('save')} Sauvegarder</button>
+      <button class="btn" id="me-play" title="Joue la version affichée, même non sauvegardée">${svg('play')} Tester</button>
       <button class="btn" id="me-stop">${svg('stop')} Stop</button>
       <button class="btn ${recording ? 'danger' : ''}" id="me-record">${svg(recording ? 'stop' : 'record')} ${recording ? 'Arrêter l’enregistrement' : 'Enregistrer les entrées'}</button>
       <button class="btn danger" id="me-delete">${svg('trash')} Supprimer</button>
     </div>
+    <div class="btn-row rec-opts" style="margin-bottom:6px">
+      <span class="muted" style="font-size:12px">Enregistreur :</span>
+      <label class="check"><input type="checkbox" id="rec-mouse" ${recordOpts.mouse ? 'checked' : ''}> clics et molette</label>
+      <label class="check"><input type="checkbox" id="rec-pos" ${recordOpts.clickPositions ? 'checked' : ''}> clics à leur position</label>
+      <label class="check"><input type="checkbox" id="rec-moves" ${recordOpts.moves ? 'checked' : ''}> mouvements</label>
+    </div>
     ${recording ? `<div class="recording-banner"><div class="rec-dot"></div>
       <span>Enregistrement en cours (<span id="rec-count">${recordedSteps.length}</span> étapes). Utilise clavier et souris librement, puis clique sur Arrêter.</span></div>` : ''}
 
-    <h2>Étapes (${(m.steps || []).length})</h2>
+    <div class="steps-head">
+      <h2>Étapes (<span id="me-steps-count">${countSteps(m.steps)}</span>)</h2>
+      <span class="muted" id="me-unsaved" style="font-size:12px"></span>
+      <button class="icon-btn" id="me-undo" title="Annuler (Ctrl+Z)">${svg('undo', 'icon')}</button>
+      <button class="icon-btn" id="me-redo" title="Rétablir (Ctrl+Y)">${svg('redo', 'icon')}</button>
+    </div>
+    <p class="muted" style="font-size:11.5px">Glisse une étape par sa poignée pour la déplacer, y compris dans une boucle.</p>
     <div class="steps-list" id="me-steps"></div>
     <div class="add-step-bar" id="me-add-bar"></div>
   `;
 
   renderSteps();
-  buildAddBar($('#me-add-bar'), []);
+  buildAddBar($('#me-add-bar'), [], 0);
 
-  $('#me-name').addEventListener('input', (e) => { m.name = e.target.value; });
-  $('#me-enabled').addEventListener('change', (e) => { m.enabled = e.target.checked; });
+  const touched = () => renderMacroList();
+  $('#me-name').addEventListener('input', (e) => { m.name = e.target.value; touched(); });
+  $('#me-enabled').addEventListener('change', (e) => { m.enabled = e.target.checked; touched(); });
   $('#me-infinite').addEventListener('change', (e) => {
     m.options.loopInfinite = e.target.checked;
     $('#me-repeat').disabled = e.target.checked;
+    touched();
   });
-  $('#me-repeat').addEventListener('input', (e) => { m.options.repeat = +e.target.value; });
-  $('#me-repeat-delay').addEventListener('input', (e) => { m.options.repeatDelayMs = +e.target.value; });
+  $('#me-repeat').addEventListener('input', (e) => { m.options.repeat = +e.target.value; touched(); });
+  $('#me-repeat-delay').addEventListener('input', (e) => { m.options.repeatDelayMs = +e.target.value; touched(); });
   $('#me-speed').addEventListener('input', (e) => {
     m.options.speed = +e.target.value;
     $('#me-speed-val').textContent = e.target.value;
+    touched();
+  });
+  $('#me-hold').addEventListener('input', (e) => { m.options.holdMs = Math.max(0, +e.target.value || 0); touched(); });
+  $('#me-jitter').addEventListener('input', (e) => {
+    m.options.jitter = +e.target.value;
+    $('#me-jitter-val').textContent = '±' + e.target.value + '%';
+    touched();
   });
   $('#me-trigger-clear').addEventListener('click', () => {
     m.trigger = null;
     $('#me-trigger').value = '';
+    touched();
   });
   setupTriggerCapture($('#me-trigger'), m);
 
   $('#me-save').addEventListener('click', saveCurrentMacro);
-  $('#me-play').addEventListener('click', () => window.satella.macros.play(m.id));
+  $('#me-play').addEventListener('click', () => playMacro(m, true));
   $('#me-stop').addEventListener('click', () => window.satella.macros.stop(m.id));
   $('#me-delete').addEventListener('click', async () => {
     if (!confirm(`Supprimer la macro « ${m.name} » ?`)) return;
-    MACROS = await window.satella.macros.remove(m.id);
+    const drafts = MACROS.filter((x) => x.id !== m.id && isUnsaved(x));
+    const saved = await window.satella.macros.remove(m.id);
+    mergeSavedMacros(saved, drafts);
     currentMacroId = null;
     renderMacroList();
     renderMacroEditor();
   });
   $('#me-record').addEventListener('click', toggleRecording);
+  $('#rec-mouse').addEventListener('change', (e) => { recordOpts.mouse = e.target.checked; });
+  $('#rec-pos').addEventListener('change', (e) => { recordOpts.clickPositions = e.target.checked; });
+  $('#rec-moves').addEventListener('change', (e) => { recordOpts.moves = e.target.checked; });
+  $('#me-undo').addEventListener('click', () => undoSteps(false));
+  $('#me-redo').addEventListener('click', () => undoSteps(true));
+}
+
+// Liste renvoyée par le processus principal (versions sauvegardées) +
+// brouillons non sauvegardés des autres macros, conservés
+function mergeSavedMacros(saved, drafts) {
+  markSaved(saved);
+  MACROS = saved.map((s) => drafts.find((d) => d.id === s.id) || s);
+  for (const d of drafts) if (!saved.some((s) => s.id === d.id)) MACROS.push(d);
 }
 
 async function saveCurrentMacro() {
   const m = currentMacro();
   if (!m) return;
   if (!m.name.trim()) return toast('Donne un nom à la macro.');
-  MACROS = await window.satella.macros.save(JSON.parse(JSON.stringify(m)));
+  const drafts = MACROS.filter((x) => x.id !== m.id && isUnsaved(x));
+  const saved = await window.satella.macros.save(clone(m));
+  mergeSavedMacros(saved, drafts);
   renderMacroList();
+  renderSteps();
   toast('Macro sauvegardée.');
 }
 
-/* Étapes : accès par chemin (imbrication 1 niveau pour les boucles) */
-function getStepsAt(path) {
+/* Étapes : accès par chemin (boucles imbriquées sur plusieurs niveaux).
+   getStepsAt([]) = étapes de la macro ; getStepsAt([2]) = étapes de la
+   boucle n°2 ; getStepsAt([2, 0]) = boucle n°0 dans la boucle n°2... */
+function getStepsAt(containerPath) {
   const m = currentMacro();
-  if (!path.length) return m.steps;
-  return m.steps[path[0]].steps;
+  if (!m.steps) m.steps = [];
+  let list = m.steps;
+  for (const i of containerPath) {
+    const s = list[i];
+    if (!s.steps) s.steps = [];
+    list = s.steps;
+  }
+  return list;
 }
 
 function renderSteps() {
   const m = currentMacro();
   const cont = $('#me-steps');
+  if (!m || !cont) return;
   cont.innerHTML = '';
   if (!m.steps) m.steps = [];
+  $('#me-steps-count').textContent = countSteps(m.steps);
+  $('#me-unsaved').textContent = isUnsaved(m) ? 'modifications non sauvegardées' : '';
+  updateHistoryButtons();
   if (!m.steps.length) {
     cont.innerHTML = '<p class="muted">Aucune étape. Ajoute des étapes ou utilise l’enregistreur.</p>';
     return;
   }
-  m.steps.forEach((s, i) => {
-    cont.appendChild(stepRow(s, [i], false));
+  appendSteps(cont, m.steps, [], 0);
+}
+
+function appendSteps(cont, list, containerPath, depth) {
+  list.forEach((s, i) => {
+    const path = [...containerPath, i];
+    cont.appendChild(stepRow(s, path, depth));
     if (s.type === 'loop') {
-      (s.steps || []).forEach((sub, j) => cont.appendChild(stepRow(sub, [i, j], true)));
+      appendSteps(cont, s.steps || [], path, depth + 1);
       const addRow = document.createElement('div');
-      addRow.className = 'step-row nested';
+      addRow.className = 'step-row nested add-row';
+      addRow.style.marginLeft = (depth + 1) * 28 + 'px';
       addRow.innerHTML = `<span class="s-icon">${svg('loop')}</span>`;
       const bar = document.createElement('div');
       bar.className = 'add-step-bar';
       bar.style.margin = '0';
-      buildAddBar(bar, [i], true);
+      buildAddBar(bar, path, depth + 1);
       addRow.appendChild(bar);
+      // Déposer ici = ajouter à la fin de la boucle
+      setupDropTarget(addRow, () => [path, (s.steps || []).length]);
       cont.appendChild(addRow);
     }
   });
 }
 
-function stepRow(s, path, nested) {
+/* ---- Glisser-déposer ---- */
+let dragPath = null;
+
+function setupDropTarget(el, target) {
+  el.addEventListener('dragover', (e) => {
+    if (!dragPath) return;
+    e.preventDefault();
+    el.classList.add('drop-target');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drop-target');
+    if (!dragPath) return;
+    const [containerPath, index] = target();
+    moveStep(dragPath, containerPath, index);
+    dragPath = null;
+  });
+}
+
+// Déplace l'étape `from` (chemin complet) à la position `toIndex` de la
+// liste `toContainer`. Une boucle ne peut pas être déposée en elle-même.
+function moveStep(from, toContainer, toIndex) {
+  const inside = toContainer.length >= from.length && from.every((v, i) => toContainer[i] === v);
+  if (inside) return toast('Une boucle ne peut pas être déplacée à l’intérieur d’elle-même.');
+  if (toContainer.length + 1 > MAX_LOOP_DEPTH && getStepsAt(from.slice(0, -1))[from[from.length - 1]].type === 'loop') {
+    return toast('Imbrication maximale atteinte.');
+  }
+  const fromList = getStepsAt(from.slice(0, -1));
+  const fromIdx = from[from.length - 1];
+  const toList = getStepsAt(toContainer); // référence résolue avant le retrait
+  if (fromList === toList && (toIndex === fromIdx || toIndex === fromIdx + 1)) return;
+  pushHistory();
+  const [item] = fromList.splice(fromIdx, 1);
+  let idx = toIndex;
+  if (fromList === toList && fromIdx < toIndex) idx--;
+  toList.splice(idx, 0, item);
+  renderSteps();
+  renderMacroList();
+}
+
+function stepRow(s, path, depth) {
   const meta = STEP_META[s.type] || { icon: 'key', name: s.type };
   const row = document.createElement('div');
-  row.className = 'step-row' + (nested ? ' nested' : '');
+  row.className = 'step-row' + (depth ? ' nested' : '');
+  if (depth) row.style.marginLeft = depth * 28 + 'px';
   row.innerHTML = `
+    <span class="s-grip" title="Glisser pour déplacer">${svg('grip')}</span>
     <span class="s-icon">${svg(meta.icon)}</span>
-    <span class="s-type">${meta.name}</span>
-    <span class="s-desc">${stepDesc(s)}</span>
+    <span class="s-type">${esc(meta.name)}</span>
+    <span class="s-desc">${esc(stepDesc(s))}</span>
     <span class="s-actions">
       <button class="icon-btn" data-act="up" title="Monter">${svg('up')}</button>
       <button class="icon-btn" data-act="down" title="Descendre">${svg('down')}</button>
@@ -670,33 +1067,73 @@ function stepRow(s, path, nested) {
       <button class="icon-btn" data-act="dup" title="Dupliquer">${svg('copy')}</button>
       <button class="icon-btn" data-act="del" title="Supprimer">${svg('close')}</button>
     </span>`;
+  row.addEventListener('dblclick', (e) => {
+    if (!e.target.closest('.s-actions')) openStepModal(s.type, path);
+  });
   row.querySelector('.s-actions').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]');
     const act = btn && btn.dataset.act;
     if (!act) return;
+    if (act === 'edit') return openStepModal(s.type, path);
     const list = getStepsAt(path.slice(0, -1));
     const idx = path[path.length - 1];
+    if ((act === 'up' && idx === 0) || (act === 'down' && idx >= list.length - 1)) return;
+    pushHistory();
     if (act === 'del') list.splice(idx, 1);
-    else if (act === 'dup') list.splice(idx + 1, 0, JSON.parse(JSON.stringify(s)));
-    else if (act === 'up' && idx > 0) [list[idx - 1], list[idx]] = [list[idx], list[idx - 1]];
-    else if (act === 'down' && idx < list.length - 1) [list[idx + 1], list[idx]] = [list[idx], list[idx + 1]];
-    else if (act === 'edit') return openStepModal(s.type, path);
+    else if (act === 'dup') list.splice(idx + 1, 0, clone(s));
+    else if (act === 'up') [list[idx - 1], list[idx]] = [list[idx], list[idx - 1]];
+    else if (act === 'down') [list[idx + 1], list[idx]] = [list[idx], list[idx + 1]];
     renderSteps();
+    renderMacroList();
   });
+  // Glisser depuis la poignée uniquement (pas de déplacement accidentel)
+  const grip = row.querySelector('.s-grip');
+  grip.addEventListener('mousedown', () => { row.draggable = true; });
+  row.addEventListener('dragstart', (e) => {
+    dragPath = path;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', 'step');
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => {
+    row.draggable = false;
+    row.classList.remove('dragging');
+    dragPath = null;
+  });
+  setupDropTarget(row, () => [path.slice(0, -1), path[path.length - 1]]);
   return row;
 }
 
-function buildAddBar(container, path, nested = false) {
-  const types = nested
-    ? ['keyTap', 'keyDown', 'keyUp', 'text', 'delay', 'mouseClick', 'mouseMove', 'mouseWheel']
-    : Object.keys(STEP_META);
+function buildAddBar(container, containerPath, depth) {
+  // Tous les types à tous les niveaux, sauf une boucle au-delà de la
+  // profondeur maximale
+  const types = Object.keys(STEP_META).filter((t) => t !== 'loop' || depth < MAX_LOOP_DEPTH);
   for (const t of types) {
     const b = document.createElement('button');
     b.className = 'btn small';
-    b.innerHTML = svg(STEP_META[t].icon) + ' ' + STEP_META[t].name;
-    b.addEventListener('click', () => openStepModal(t, null, path));
+    b.innerHTML = svg(STEP_META[t].icon) + ' ' + esc(STEP_META[t].name);
+    b.addEventListener('click', () => openStepModal(t, null, containerPath));
     container.appendChild(b);
   }
+}
+
+// Macros qui finissent (directement ou non) par appeler `targetId` :
+// les proposer dans « Exécuter macro » créerait une boucle infinie
+function callersOf(targetId) {
+  const calls = (steps, ids) => (steps || []).some((s) =>
+    (s.type === 'runMacro' && ids.has(s.macroId)) || (s.type === 'loop' && calls(s.steps, ids)));
+  const result = new Set([targetId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const m of MACROS) {
+      if (!result.has(m.id) && calls(m.steps, result)) {
+        result.add(m.id);
+        changed = true;
+      }
+    }
+  }
+  return result;
 }
 
 /* ---- Modale d'édition d'étape ---- */
@@ -708,11 +1145,12 @@ function openStepModal(type, editPath = null, addPath = []) {
   const meta = STEP_META[type];
 
   const keyOptions = KEY_NAMES.map((k) =>
-    `<option value="${k}" ${s.key === k ? 'selected' : ''}>${keyLabel(k)}</option>`).join('');
+    `<option value="${esc(k)}" ${s.key === k ? 'selected' : ''}>${esc(keyLabel(k))}</option>`).join('');
   const btnOptions = Object.entries(BUTTON_LABELS).map(([v, l]) =>
     `<option value="${v}" ${s.button === v ? 'selected' : ''}>${l}</option>`).join('');
-  const macroOptions = MACROS.filter((m) => m.id !== currentMacroId).map((m) =>
-    `<option value="${m.id}" ${s.macroId === m.id ? 'selected' : ''}>${m.name}</option>`).join('');
+  const forbidden = callersOf(currentMacroId);
+  const macroOptions = MACROS.filter((m) => !forbidden.has(m.id)).map((m) =>
+    `<option value="${esc(m.id)}" ${s.macroId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 
   let fields = '';
   switch (type) {
@@ -723,7 +1161,7 @@ function openStepModal(type, editPath = null, addPath = []) {
         <div class="btn-row">
           ${['lctrl', 'lshift', 'lalt', 'lwin'].map((mod) => `
             <label class="check"><input type="checkbox" class="sf-mod" value="${mod}"
-              ${(s.modifiers || []).includes(mod) ? 'checked' : ''}> ${keyLabel(mod).replace(' gauche', '')}</label>`).join('')}
+              ${(s.modifiers || []).includes(mod) ? 'checked' : ''}> ${esc(keyLabel(mod).replace(' gauche', ''))}</label>`).join('')}
         </div>`;
       break;
     case 'keyDown': case 'keyUp':
@@ -731,24 +1169,25 @@ function openStepModal(type, editPath = null, addPath = []) {
       break;
     case 'text':
       fields = `<label>Texte à taper</label>
-        <textarea id="sf-text" rows="4" style="width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:8px">${s.value || ''}</textarea>`;
+        <textarea id="sf-text" rows="4" style="width:100%">${esc(s.value || '')}</textarea>
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">Les retours à la ligne deviennent des appuis sur Entrée, les tabulations des appuis sur Tab.</p>`;
       break;
     case 'delay':
-      fields = `<label>Durée (ms)</label><input type="number" id="sf-ms" min="1" max="600000" value="${s.ms || 100}">`;
+      fields = `<label>Durée (ms)</label><input type="number" id="sf-ms" min="1" max="600000" value="${+s.ms || 100}">`;
       break;
     case 'mouseClick':
       fields = `
         <label>Bouton</label><select id="sf-button">${btnOptions}</select>
-        <label>Nombre de clics</label><input type="number" id="sf-count" min="1" max="100" value="${s.count || 1}">`;
+        <label>Nombre de clics</label><input type="number" id="sf-count" min="1" max="100" value="${+s.count || 1}">`;
       break;
     case 'mouseDown': case 'mouseUp':
       fields = `<label>Bouton</label><select id="sf-button">${btnOptions}</select>`;
       break;
     case 'mouseMove':
       fields = `
-        <label>X</label><input type="number" id="sf-x" value="${s.x || 0}">
-        <label>Y</label><input type="number" id="sf-y" value="${s.y || 0}">
-        <label class="check" style="grid-column:1/3"><input type="checkbox" id="sf-relative" ${s.relative ? 'checked' : ''}> Déplacement relatif (sinon position absolue à l'écran)</label>`;
+        <label>X</label><input type="number" id="sf-x" value="${+s.x || 0}">
+        <label>Y</label><input type="number" id="sf-y" value="${+s.y || 0}">
+        <label class="check" style="grid-column:1/3"><input type="checkbox" id="sf-relative" ${s.relative ? 'checked' : ''}> Déplacement relatif (sinon position absolue, tous écrans confondus)</label>`;
       break;
     case 'mouseWheel':
       fields = `
@@ -756,21 +1195,21 @@ function openStepModal(type, editPath = null, addPath = []) {
         <label class="check" style="grid-column:1/3"><input type="checkbox" id="sf-horizontal" ${s.horizontal ? 'checked' : ''}> Défilement horizontal</label>`;
       break;
     case 'loop':
-      fields = `<label>Nombre de répétitions</label><input type="number" id="sf-count" min="1" max="10000" value="${s.count || 2}">
+      fields = `<label>Nombre de répétitions</label><input type="number" id="sf-count" min="1" max="10000" value="${+s.count || 2}">
         <p class="muted" style="grid-column:1/3">Les étapes de la boucle s'ajoutent ensuite sous celle-ci dans la liste.</p>`;
       break;
     case 'runMacro':
       fields = macroOptions
         ? `<label>Macro à exécuter</label><select id="sf-macro">${macroOptions}</select>`
-        : '<p class="muted">Aucune autre macro disponible.</p>';
+        : '<p class="muted">Aucune autre macro disponible (celles qui appellent déjà cette macro sont exclues pour éviter une boucle infinie).</p>';
       break;
   }
 
   modal.innerHTML = `
-    <h3>${svg(meta.icon, 'icon')} ${meta.name}</h3>
+    <h3>${svg(meta.icon, 'icon')} ${esc(meta.name)}</h3>
     <div class="form-grid">${fields}</div>
     <label>Pause après l'étape (ms)</label>
-    <input type="number" id="sf-gap" min="0" max="60000" value="${s.gapMs !== undefined ? s.gapMs : 15}" style="margin:6px 0 14px">
+    <input type="number" id="sf-gap" min="0" max="60000" value="${s.gapMs !== undefined ? +s.gapMs : 15}" style="margin:6px 0 14px">
     <div class="btn-row">
       <button class="btn primary" id="sf-ok">Valider</button>
       <button class="btn" id="sf-cancel">Annuler</button>
@@ -779,7 +1218,8 @@ function openStepModal(type, editPath = null, addPath = []) {
 
   $('#sf-cancel').addEventListener('click', () => { backdrop.hidden = true; });
   $('#sf-ok').addEventListener('click', () => {
-    const out = { type, gapMs: +($('#sf-gap').value || 15) };
+    const gap = $('#sf-gap').value;
+    const out = { type, gapMs: gap === '' ? 15 : Math.max(0, +gap) };
     switch (type) {
       case 'keyTap':
         out.key = $('#sf-key').value;
@@ -787,19 +1227,22 @@ function openStepModal(type, editPath = null, addPath = []) {
         break;
       case 'keyDown': case 'keyUp': out.key = $('#sf-key').value; break;
       case 'text': out.value = $('#sf-text').value; break;
-      case 'delay': out.ms = +$('#sf-ms').value; break;
-      case 'mouseClick': out.button = $('#sf-button').value; out.count = +$('#sf-count').value; break;
+      case 'delay': out.ms = Math.max(0, +$('#sf-ms').value || 0); break;
+      case 'mouseClick': out.button = $('#sf-button').value; out.count = Math.max(1, +$('#sf-count').value || 1); break;
       case 'mouseDown': case 'mouseUp': out.button = $('#sf-button').value; break;
       case 'mouseMove':
-        out.x = +$('#sf-x').value; out.y = +$('#sf-y').value;
+        out.x = +$('#sf-x').value || 0; out.y = +$('#sf-y').value || 0;
         out.relative = $('#sf-relative').checked;
         break;
-      case 'mouseWheel':
-        out.delta = (+$('#sf-cranks').value || 1) * 120;
+      case 'mouseWheel': {
+        const cranks = +$('#sf-cranks').value;
+        if (!cranks) return toast('Indique un nombre de crans non nul.');
+        out.delta = cranks * 120;
         out.horizontal = $('#sf-horizontal').checked;
         break;
+      }
       case 'loop':
-        out.count = +$('#sf-count').value;
+        out.count = Math.max(1, +$('#sf-count').value || 1);
         out.steps = existing ? existing.steps || [] : [];
         break;
       case 'runMacro':
@@ -807,6 +1250,7 @@ function openStepModal(type, editPath = null, addPath = []) {
         out.macroId = $('#sf-macro').value;
         break;
     }
+    pushHistory();
     if (editPath) {
       const list = getStepsAt(editPath.slice(0, -1));
       list[editPath[editPath.length - 1]] = out;
@@ -815,11 +1259,15 @@ function openStepModal(type, editPath = null, addPath = []) {
     }
     backdrop.hidden = true;
     renderSteps();
+    renderMacroList();
   });
 }
 $('#modal-backdrop').addEventListener('click', (e) => {
   if (calib) return; // pas de fermeture accidentelle pendant la calibration
-  if (e.target === e.currentTarget) e.currentTarget.hidden = true;
+  if (e.target === e.currentTarget) {
+    e.currentTarget.hidden = true;
+    e.currentTarget.dispatchEvent(new Event('modal-dismiss'));
+  }
 });
 
 /* ================= Calibration de la carte des touches ================= */
@@ -837,14 +1285,14 @@ async function calibLight() {
 function renderCalibModal() {
   if (!calib) return;
   const last = calib.lastLabel
-    ? `<p class="muted" style="margin-top:8px">Dernière touche associée : ${calib.lastLabel}</p>` : '';
+    ? `<p class="muted" style="margin-top:8px">Dernière touche associée : ${esc(calib.lastLabel)}</p>` : '';
   const dup = calib.dupWarn
-    ? `<p style="margin-top:8px;color:var(--warn)">Appui reconnu comme « ${calib.dupWarn} », déjà associée.
+    ? `<p style="margin-top:8px;color:var(--warn)">Appui reconnu comme « ${esc(calib.dupWarn)} », déjà associée.
        Si la touche allumée est sa jumelle (Alt droit, Ctrl droit...), le clavier envoie le même code :
        associe-la manuellement ci-dessous.</p>` : '';
   const options = LAYOUT.keyboard.map((k) => {
     const label = keyLabel(k.id) + (calib.map[k.id] !== undefined ? ' (déjà associée)' : '');
-    return `<option value="${k.id}">${label}</option>`;
+    return `<option value="${esc(k.id)}">${esc(label)}</option>`;
   }).join('');
   $('#modal').innerHTML = `
     <h3>${svg('key', 'icon')} Calibration (${calib.slot + 1} / ${CALIB_TOTAL})</h3>
@@ -959,7 +1407,7 @@ function acceleratorFromEvent(e) {
 }
 
 // Champ de capture générique : focus, pression d'un raccourci, rappel
-function captureAccelerator(inputEl, getCurrent, onAccel) {
+function captureAccelerator(inputEl, getCurrent, onAccel, self) {
   inputEl.addEventListener('focus', () => {
     inputEl.classList.add('capturing');
     inputEl.value = 'Presse un raccourci…';
@@ -968,6 +1416,8 @@ function captureAccelerator(inputEl, getCurrent, onAccel) {
       e.stopPropagation();
       const accel = acceleratorFromEvent(e);
       if (!accel) return;
+      const other = accelConflict(accel, self);
+      if (other) toast(`Attention : ${accel} est déjà utilisé par ${other}.`, 4000);
       onAccel(accel);
       inputEl.value = accel;
       inputEl.blur();
@@ -985,7 +1435,11 @@ function setupTriggerCapture(inputEl, macro) {
   captureAccelerator(
     inputEl,
     () => macro.trigger && macro.trigger.accelerator,
-    (accel) => { macro.trigger = { type: 'hotkey', accelerator: accel }; }
+    (accel) => {
+      macro.trigger = { type: 'hotkey', accelerator: accel };
+      renderMacroList();
+    },
+    macro
   );
 }
 
@@ -997,14 +1451,16 @@ async function toggleRecording() {
     if (!CAPS.uiohook) return toast("L'écoute globale n'est pas disponible sur ce système.");
     recording = true;
     recordedSteps = [];
-    await window.satella.macros.recordStart({ mouse: true, moves: false });
+    await window.satella.macros.recordStart({ ...recordOpts });
     renderMacroEditor();
   } else {
     recording = false;
     let steps = await window.satella.macros.recordStop();
     steps = trimRecordingTail(steps);
+    pushHistory();
     m.steps = (m.steps || []).concat(steps);
     renderMacroEditor();
+    renderMacroList();
     toast(`${steps.length} étape(s) ajoutée(s) depuis l'enregistrement.`);
   }
 }
@@ -1014,7 +1470,7 @@ function trimRecordingTail(steps) {
   const out = [...steps];
   while (out.length) {
     const last = out[out.length - 1];
-    if (last.type === 'mouseDown' || last.type === 'mouseUp' || last.type === 'delay') out.pop();
+    if (['mouseDown', 'mouseUp', 'mouseMove', 'delay'].includes(last.type)) out.pop();
     else break;
   }
   return out;
@@ -1026,7 +1482,7 @@ function newMacro() {
     name: 'Nouvelle macro',
     enabled: true,
     trigger: null,
-    options: { repeat: 1, loopInfinite: false, repeatDelayMs: 0, speed: 1 },
+    options: { repeat: 1, loopInfinite: false, repeatDelayMs: 0, speed: 1, holdMs: 0, jitter: 0 },
     steps: [],
   };
   MACROS.push(m);
@@ -1035,6 +1491,19 @@ function newMacro() {
   renderMacroEditor();
 }
 $('#macro-new').addEventListener('click', newMacro);
+
+// Nouvelle liste de macros venue du processus principal (profil chargé)
+function replaceMacros(list, reason) {
+  const lost = MACROS.filter(isUnsaved);
+  MACROS = list;
+  markSaved(list);
+  currentMacroId = MACROS.some((m) => m.id === currentMacroId) ? currentMacroId : null;
+  renderMacroList();
+  renderMacroEditor();
+  if (lost.length && reason) {
+    toast(`${reason} : modifications non sauvegardées abandonnées (${lost.map((m) => m.name).join(', ')}).`, 5000);
+  }
+}
 
 /* ================= Périphériques ================= */
 let DIRECT = { keyboard: null, mouse: null };
@@ -1047,7 +1516,15 @@ function updateBadge() {
       <span class="dv-name">${label}</span>
       <span class="dv-via">${direct ? 'DIRECT' : 'ABSENT'}</span>
     </div>`;
-  badge.innerHTML = row('GS98', DIRECT.keyboard) + row('PC365A', DIRECT.mouse);
+  badge.innerHTML = row('GS98', DIRECT.keyboard) + row('PC365A', DIRECT.mouse) + `
+    <button class="side-toggle ${DIMMED ? 'on' : ''}" id="leds-toggle"
+      title="Éteindre ou rallumer toutes les LED">${DIMMED ? 'LED éteintes · rallumer' : 'Éteindre les LED'}</button>
+    <div class="side-profile" title="Les modifications d'éclairage et de macros sont enregistrées dans ce profil">
+      Profil : <b>${ACTIVE_PROFILE ? esc(ACTIVE_PROFILE) : 'aucun'}</b></div>`;
+  $('#leds-toggle').addEventListener('click', async () => {
+    DIMMED = await window.satella.led.setManualOff(!DIMMED);
+    updateBadge();
+  });
 }
 
 function renderDirectPanel(status) {
@@ -1067,26 +1544,27 @@ function renderDirectPanel(status) {
     <p class="muted" style="margin-bottom:10px">
       Satella parle directement au matériel, sans logiciel tiers. Le clavier utilise
       ses effets natifs (dont l'éclairage touche par touche) et mémorise les
-      réglages dans sa propre mémoire.
+      réglages dans sa propre mémoire. Un périphérique rebranché reçoit
+      automatiquement les réglages en cours.
     </p>
     ${row(status.keyboard, 'Clavier SURMEN GS98, puce EVision', '320F:505B')}
     ${row(status.mouse, 'Souris Risophy PC365A, puce Areson', '25A7:FA7B')}
-    ${status.error ? `<p class="muted">Attention : ${status.error}</p>` : ''}
+    ${status.error ? `<p class="muted">Attention : ${esc(status.error)}</p>` : ''}
   `;
 }
 
 function renderHidList(hid) {
   const p = $('#hid-list');
   if (!hid.available) {
-    p.innerHTML = `<p class="muted">Détection USB indisponible : ${hid.error || ''}</p>`;
+    p.innerHTML = `<p class="muted">Détection USB indisponible : ${esc(hid.error || '')}</p>`;
     return;
   }
   const devs = hid.devices.filter((d) => d.product || d.manufacturer);
   devs.sort((a, b) => (b.isLikelyTarget - a.isLikelyTarget));
   p.innerHTML = devs.map((d) => `
     <div class="hid-row">
-      <span style="flex:1">${d.manufacturer ? d.manufacturer + ' · ' : ''}${d.product || '(sans nom)'}</span>
-      <span class="h-ids">${d.vid}:${d.pid}</span>
+      <span style="flex:1">${d.manufacturer ? esc(d.manufacturer) + ' · ' : ''}${esc(d.product || '(sans nom)')}</span>
+      <span class="h-ids">${esc(d.vid)}:${esc(d.pid)}</span>
       ${d.isLikelyTarget ? '<span class="tag tag-target">Ton périphérique</span>' : ''}
       ${d.looksLikeKeyboard ? '<span class="tag tag-kb">Clavier</span>' : ''}
       ${d.looksLikeMouse ? '<span class="tag tag-mouse">Souris</span>' : ''}
@@ -1145,68 +1623,126 @@ const DIAG_MOUSE_MODES = [
 })();
 
 /* ================= Profils ================= */
-async function renderProfiles() {
-  const profiles = await window.satella.profiles.list();
+let pendingProfiles = null; // liste reçue pendant qu'on éditait la page
+
+function setActiveProfile(name) {
+  ACTIVE_PROFILE = name || null;
+  updateBadge();
+}
+
+async function renderProfiles(payload) {
+  const { profiles, active } = payload || await window.satella.profiles.list();
+  pendingProfiles = null;
+  setActiveProfile(active);
   const p = $('#profile-list');
   p.innerHTML = profiles.map((pr) => `
-    <div class="profile-row" data-name="${pr.name.replace(/"/g, '&quot;')}">
+    <div class="profile-row ${pr.name === active ? 'active' : ''}" data-name="${esc(pr.name)}">
       <div class="p-main">
-        <span class="p-name">${pr.name}
+        <span class="p-name">${esc(pr.name)}
+          ${pr.name === active ? '<span class="tag tag-target">Actif</span>' : ''}
           ${pr.isDefault ? '<span class="tag tag-kb">Par défaut</span>' : ''}</span>
-        <span class="p-date">${new Date(pr.savedAt).toLocaleString('fr-FR')}</span>
+        <span class="p-date" title="Dernière modification">${esc(fmtDate(pr.savedAt))}</span>
         <button class="btn small p-load">Charger</button>
         <button class="btn small p-default">${pr.isDefault ? 'Retirer le défaut' : 'Par défaut'}</button>
+        <button class="btn small p-rename">Renommer</button>
+        <button class="btn small p-export">Exporter</button>
         <button class="btn small danger p-del">Supprimer</button>
       </div>
       <div class="p-apps">
         <input type="text" class="p-apps-input" placeholder="Applications liées : jeu.exe, autre.exe"
-          value="${(pr.apps || []).join(', ')}">
+          value="${esc((pr.apps || []).join(', '))}">
         <button class="btn small p-apps-save">Lier</button>
       </div>
     </div>`).join('') || '<p class="muted">Aucun profil sauvegardé.</p>';
 
+  const rowName = (e) => e.target.closest('.profile-row').dataset.name;
   $$('.p-default').forEach((b) => b.addEventListener('click', async (e) => {
-    const row = e.target.closest('.profile-row');
-    const pr = profiles.find((x) => x.name === row.dataset.name);
-    await window.satella.profiles.setMeta(row.dataset.name, { isDefault: !(pr && pr.isDefault) });
-    renderProfiles();
+    const name = rowName(e);
+    const pr = profiles.find((x) => x.name === name);
+    renderProfiles(await window.satella.profiles.setMeta(name, { isDefault: !(pr && pr.isDefault) }));
   }));
   $$('.p-apps-save').forEach((b) => b.addEventListener('click', async (e) => {
     const row = e.target.closest('.profile-row');
     const apps = row.querySelector('.p-apps-input').value.split(',');
-    await window.satella.profiles.setMeta(row.dataset.name, { apps });
-    renderProfiles();
+    renderProfiles(await window.satella.profiles.setMeta(row.dataset.name, { apps }));
     toast('Applications liées au profil.');
   }));
-
   $$('.p-load').forEach((b) => b.addEventListener('click', async (e) => {
-    const name = e.target.closest('.profile-row').dataset.name;
+    const name = rowName(e);
     const res = await window.satella.profiles.load(name);
     if (res) {
       STATE = res.ledState;
-      MACROS = res.macros;
-      currentMacroId = null;
+      replaceMacros(res.macros, `Profil « ${name} » chargé`);
       syncToolbars();
-      renderMacroList();
-      renderMacroEditor();
+      renderProfiles(res);
       toast(`Profil « ${name} » chargé.`);
     }
   }));
-  $$('.p-del').forEach((b) => b.addEventListener('click', async (e) => {
-    const name = e.target.closest('.profile-row').dataset.name;
-    if (!confirm(`Supprimer le profil « ${name} » ?`)) return;
-    await window.satella.profiles.remove(name);
-    renderProfiles();
+  $$('.p-rename').forEach((b) => b.addEventListener('click', async (e) => {
+    const name = rowName(e);
+    const next = await askText({ title: 'Renommer le profil', label: 'Nouveau nom', value: name, ok: 'Renommer' });
+    if (!next || next === name) return;
+    const res = await window.satella.profiles.rename(name, next);
+    if (!res.ok) toast('Renommage impossible : ' + res.error, 4000);
+    renderProfiles(res);
   }));
+  $$('.p-export').forEach((b) => b.addEventListener('click', async (e) => {
+    const res = await window.satella.data.exportProfile(rowName(e));
+    if (res.ok) toast('Profil exporté : ' + res.file, 4000);
+    else if (!res.canceled) toast('Export impossible : ' + res.error, 4000);
+  }));
+  $$('.p-del').forEach((b) => b.addEventListener('click', async (e) => {
+    const name = rowName(e);
+    if (!confirm(`Supprimer le profil « ${name} » ?`)) return;
+    renderProfiles(await window.satella.profiles.remove(name));
+  }));
+}
+
+// Mise à jour venue du processus principal : différée si l'utilisateur
+// est en train de saisir sur la page Profils
+function onProfilesChanged(payload) {
+  setActiveProfile(payload.active);
+  const editing = currentPage === 'profiles' && document.activeElement
+    && document.activeElement.closest && document.activeElement.closest('#profile-list');
+  if (currentPage === 'profiles' && !editing) renderProfiles(payload);
+  else pendingProfiles = payload;
 }
 
 $('#profile-save').addEventListener('click', async () => {
   const name = $('#profile-name').value.trim();
   if (!name) return toast('Donne un nom au profil.');
-  await window.satella.profiles.save(name);
+  renderProfiles(await window.satella.profiles.save(name));
   $('#profile-name').value = '';
-  renderProfiles();
-  toast(`Profil « ${name} » sauvegardé.`);
+  toast(`Profil « ${name} » sauvegardé et actif.`);
+});
+$('#profile-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('#profile-save').click();
+});
+
+$('#data-export-all').addEventListener('click', async () => {
+  const res = await window.satella.data.exportAll();
+  if (res.ok) toast('Sauvegarde enregistrée : ' + res.file, 4000);
+  else if (!res.canceled) toast('Sauvegarde impossible : ' + res.error, 4000);
+});
+$('#data-import').addEventListener('click', async () => {
+  const res = await window.satella.data.import();
+  if (!res.ok) {
+    if (!res.canceled) toast('Import impossible : ' + res.error, 5000);
+    return;
+  }
+  if (res.kind === 'profile') {
+    toast(`Profil « ${res.name} » importé.`);
+  } else {
+    STATE = res.ledState;
+    replaceMacros(res.macros, null);
+    SNIPPETS = res.snippets;
+    TURBOS = res.turbos;
+    syncToolbars();
+    renderSnippets();
+    renderTurbos();
+    toast('Sauvegarde restaurée.');
+  }
+  renderProfiles(res);
 });
 
 /* ================= Expansion de texte ================= */
@@ -1227,12 +1763,16 @@ function renderSnippets() {
     const row = document.createElement('div');
     row.className = 'snippet-row';
     row.innerHTML = `
-      <input type="text" class="sn-abbr" placeholder=";abrev" value="${(s.abbr || '').replace(/"/g, '&quot;')}">
-      <textarea class="sn-text" rows="1" placeholder="Texte de remplacement">${s.text || ''}</textarea>
+      <input type="text" class="sn-abbr" maxlength="32" placeholder=";abrev" value="${esc(s.abbr || '')}">
+      <textarea class="sn-text" rows="1" placeholder="Texte de remplacement">${esc(s.text || '')}</textarea>
       <label class="switch"><input type="checkbox" class="sn-on" ${s.enabled ? 'checked' : ''}><span></span></label>
       <button class="icon-btn sn-del" title="Supprimer">${svg('close')}</button>`;
     row.querySelector('.sn-abbr').addEventListener('change', (e) => {
-      SNIPPETS[i].abbr = e.target.value.trim();
+      const abbr = e.target.value.trim();
+      const dup = SNIPPETS.find((x, j) => j !== i && x.abbr && x.abbr.toLowerCase() === abbr.toLowerCase());
+      if (dup) toast(`L'abréviation « ${abbr} » existe déjà.`, 3500);
+      if (abbr && [...abbr].length < 2) toast('Une abréviation doit faire au moins 2 caractères.', 3500);
+      SNIPPETS[i].abbr = abbr;
       saveSnippets();
     });
     row.querySelector('.sn-text').addEventListener('change', (e) => {
@@ -1269,7 +1809,7 @@ const TURBO_TARGETS = [
 ];
 
 function saveTurbos() {
-  window.satella.turbos.set(JSON.parse(JSON.stringify(TURBOS)));
+  window.satella.turbos.set(clone(TURBOS));
 }
 
 function turboTargetValue(t) {
@@ -1287,21 +1827,23 @@ function renderTurbos() {
     const row = document.createElement('div');
     row.className = 'turbo-row';
     row.dataset.id = t.id;
+    const err = shortcutError('turbo', t.id);
     const targetOpts = TURBO_TARGETS.map(([v, l]) =>
       `<option value="${v}" ${turboTargetValue(t) === v ? 'selected' : ''}>${l}</option>`).join('');
     const keyOpts = KEY_NAMES.map((k) =>
-      `<option value="${k}" ${t.target && t.target.key === k ? 'selected' : ''}>${keyLabel(k)}</option>`).join('');
+      `<option value="${esc(k)}" ${t.target && t.target.key === k ? 'selected' : ''}>${esc(keyLabel(k))}</option>`).join('');
     row.innerHTML = `
       <span class="turbo-dot" title="Actif quand allumé"></span>
       <select class="tb-target">${targetOpts}</select>
       <select class="tb-key" style="display:${turboTargetValue(t) === 'key' ? '' : 'none'}">${keyOpts}</select>
       <label class="muted" style="font-size:12px">Cadence</label>
-      <input type="range" class="tb-cps" min="1" max="50" value="${t.cps || 10}" style="width:110px">
-      <span class="muted tb-cps-val" style="font-family:var(--font-mono);font-size:12px">${t.cps || 10}/s</span>
+      <input type="range" class="tb-cps" min="1" max="50" value="${+t.cps || 10}" style="width:110px">
+      <span class="muted tb-cps-val" style="font-family:var(--font-mono);font-size:12px">${+t.cps || 10}/s</span>
       <input type="text" readonly class="trigger-input tb-accel" style="min-width:130px"
-        value="${t.accelerator || ''}" placeholder="Raccourci...">
+        value="${esc(t.accelerator || '')}" placeholder="Raccourci...">
       <label class="switch"><input type="checkbox" class="tb-on" ${t.enabled ? 'checked' : ''}><span></span></label>
-      <button class="icon-btn tb-del" title="Supprimer">${svg('close')}</button>`;
+      <button class="icon-btn tb-del" title="Supprimer">${svg('close')}</button>
+      ${err ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} Raccourci inactif : ${esc(err.reason)}.</span>` : ''}`;
 
     row.querySelector('.tb-target').addEventListener('change', (e) => {
       const v = e.target.value;
@@ -1325,7 +1867,8 @@ function renderTurbos() {
     captureAccelerator(
       row.querySelector('.tb-accel'),
       () => TURBOS[i].accelerator,
-      (accel) => { TURBOS[i].accelerator = accel; saveTurbos(); }
+      (accel) => { TURBOS[i].accelerator = accel; saveTurbos(); },
+      t
     );
     row.querySelector('.tb-on').addEventListener('change', (e) => {
       TURBOS[i].enabled = e.target.checked;
@@ -1408,6 +1951,8 @@ function renderSettings(s) {
   $('#set-idleoff').checked = s.idleOff;
   $('#set-idle-min').value = s.idleMinutes;
   $('#set-idle-val').textContent = s.idleMinutes + ' min';
+  $('#set-offlock').checked = !!s.offOnLock;
+  $('#set-flash').checked = !!s.flashOnMacro;
   $('#set-autoupdate').checked = s.autoCheckUpdates;
   $('#mem-auto').checked = s.autoOptimize;
   $('#mem-threshold').value = s.autoOptimizeThreshold;
@@ -1422,30 +1967,32 @@ function renderSettings(s) {
   if (active && active.style.display === 'none') showPage('home');
 }
 
+// Interrupteurs simples : réglage booléen <-> case à cocher
+const SETTING_SWITCHES = {
+  '#set-startmin': 'startMinimized',
+  '#set-appprofiles': 'appProfiles',
+  '#set-idleoff': 'idleOff',
+  '#set-offlock': 'offOnLock',
+  '#set-flash': 'flashOnMacro',
+  '#set-autoupdate': 'autoCheckUpdates',
+};
+for (const [sel, key] of Object.entries(SETTING_SWITCHES)) {
+  $(sel).addEventListener('change', async (e) => {
+    renderSettings(await window.satella.settings.set({ [key]: e.target.checked }));
+  });
+}
+
 $('#set-startup').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ launchAtStartup: e.target.checked }));
   toast(e.target.checked
     ? 'Satella se lancera au démarrage de Windows.'
     : 'Lancement au démarrage désactivé.');
 });
-$('#set-startmin').addEventListener('change', async (e) => {
-  renderSettings(await window.satella.settings.set({ startMinimized: e.target.checked }));
-});
-
-$('#set-appprofiles').addEventListener('change', async (e) => {
-  renderSettings(await window.satella.settings.set({ appProfiles: e.target.checked }));
-});
-$('#set-idleoff').addEventListener('change', async (e) => {
-  renderSettings(await window.satella.settings.set({ idleOff: e.target.checked }));
-});
 $('#set-idle-min').addEventListener('input', (e) => {
   $('#set-idle-val').textContent = e.target.value + ' min';
 });
 $('#set-idle-min').addEventListener('change', (e) => {
   window.satella.settings.set({ idleMinutes: +e.target.value });
-});
-$('#set-autoupdate').addEventListener('change', async (e) => {
-  renderSettings(await window.satella.settings.set({ autoCheckUpdates: e.target.checked }));
 });
 
 $('#set-leds').addEventListener('change', async (e) => {
@@ -1456,6 +2003,14 @@ $('#set-macros').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ macrosEnabled: e.target.checked }));
   toast(e.target.checked ? 'Macros activées.' : 'Macros désactivées.');
 });
+
+// Dépannage
+$('#diag-copy').addEventListener('click', async () => {
+  await window.satella.diagnostic();
+  toast('Rapport de diagnostic copié dans le presse-papiers.');
+});
+$('#diag-logs').addEventListener('click', () => window.satella.openLogs());
+$('#diag-data').addEventListener('click', () => window.satella.openData());
 
 // L'entrée de démarrage peut être retirée depuis le gestionnaire des tâches
 // de Windows : on reflète l'état réel plutôt que le réglage enregistré.
@@ -1482,9 +2037,13 @@ async function init() {
   LAYOUT = data.layout;
   STATE = data.ledState;
   MACROS = data.macros;
+  markSaved(MACROS);
   KEY_NAMES = data.keyNames;
   KEY_LABELS = data.keyLabels;
   CAPS = data.capabilities;
+  SHORTCUT_ERRORS = data.shortcutErrors || [];
+  ACTIVE_PROFILE = data.active || null;
+  DIMMED = !!data.dimmed;
   $('#app-version').textContent = data.version || '?';
   renderSettings(data.settings || SETTINGS);
   SNIPPETS = data.snippets || [];
@@ -1504,38 +2063,64 @@ async function init() {
   renderMacroEditor();
   renderDirectPanel(data.direct);
   renderHidList(data.hid);
-  renderProfiles();
+  renderProfiles({ profiles: data.profiles || [], active: data.active });
 
   window.satella.led.onFrame(applyFrame);
+  window.satella.led.onDimmed(({ dimmed }) => {
+    DIMMED = dimmed;
+    updateBadge();
+  });
   window.satella.devices.onDirectStatus(renderDirectPanel);
   window.satella.macros.onRecordEvent((step) => {
     if (!recording) return;
     recordedSteps.push(step);
-    const banner = $('.recording-banner');
     const counter = $('#rec-count');
     if (counter) counter.textContent = recordedSteps.length;
   });
   window.satella.macros.onPlayState(({ id, playing }) => {
-    const el = document.querySelector(`.macro-item[data-id="${id}"]`);
+    const el = document.querySelector(`.macro-item[data-id="${CSS.escape(id)}"]`);
     if (el) el.classList.toggle('playing', playing);
   });
   window.satella.macros.onPlayError(({ message }) => toast('Erreur macro : ' + message, 4000));
+  window.satella.shortcuts.onErrors((errors) => {
+    SHORTCUT_ERRORS = errors || [];
+    renderMacroList();
+    renderTurbos();
+    if (currentMacro()) {
+      const err = shortcutError('macro', currentMacroId);
+      const holder = $('#me-trigger');
+      if (holder) {
+        const row = holder.parentElement;
+        const old = row.querySelector('.warn-text');
+        if (old) old.remove();
+        if (err) {
+          const span = document.createElement('span');
+          span.className = 'warn-text';
+          span.style.flexBasis = '100%';
+          span.innerHTML = `${svg('warn')} Raccourci inactif : ${esc(err.reason)}.`;
+          row.insertBefore(span, row.querySelector('.muted'));
+        }
+      }
+    }
+  });
   window.satella.settings.onChanged(renderSettings);
   window.satella.turbos.onState(({ id, running }) => {
-    const row = document.querySelector(`.turbo-row[data-id="${id}"]`);
+    const row = document.querySelector(`.turbo-row[data-id="${CSS.escape(id)}"]`);
     if (row) row.querySelector('.turbo-dot').classList.toggle('on', running);
     if (running) toast('Turbo activé. Le même raccourci l\'arrête.');
   });
-  window.satella.profiles.onAutoApplied(({ name, exe, ledState, macros: m }) => {
-    STATE = ledState;
-    MACROS = m;
-    currentMacroId = null;
+  window.satella.profiles.onChanged(onProfilesChanged);
+  window.satella.profiles.onAutoApplied((res) => {
+    STATE = res.ledState;
+    replaceMacros(res.macros, `Profil « ${res.name} » appliqué`);
     syncToolbars();
-    renderMacroList();
-    renderMacroEditor();
-    toast(exe
-      ? `Profil « ${name} » appliqué pour ${exe}.`
-      : `Profil par défaut « ${name} » appliqué.`);
+    onProfilesChanged(res);
+    if (res.manual) toast(`Profil « ${res.name} » chargé.`);
+    else {
+      toast(res.exe
+        ? `Profil « ${res.name} » appliqué pour ${res.exe}.`
+        : `Profil par défaut « ${res.name} » appliqué.`);
+    }
   });
   window.satella.memory.onAuto((res) => {
     if (res && res.ok && res.freed > 0) {
@@ -1544,6 +2129,7 @@ async function init() {
     }
   });
 
+  window.satella.setPage(currentPage);
   window.satella.ready();
 }
 

@@ -2,6 +2,9 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <!-- Aucun script externe ni en ligne : seuls les fichiers de l'application s'exécutent -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Satella</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -96,6 +99,7 @@
           <div class="tool-group">
             <label>Effet</label>
             <div class="seg" id="kb-effects"></div>
+            <p class="fx-hint" id="kb-fx-hint" hidden></p>
           </div>
           <div class="tool-group">
             <label>Couleur</label>
@@ -129,6 +133,15 @@
             </div>
             <label class="check"><input type="checkbox" id="kb-paint"> Mode pinceau : cliquer colore directement</label>
             <button id="kb-calibrate" class="btn small">Calibrer la carte des touches</button>
+          </div>
+          <div class="tool-group">
+            <label>Calque <span class="val"><span id="kb-overlay-count">0</span> touche(s) fixe(s)</span></label>
+            <div class="btn-row">
+              <button id="kb-overlay-add" class="btn" title="Les touches sélectionnées gardent la couleur choisie, quel que soit l'effet">Fixer par-dessus l'effet</button>
+              <button id="kb-overlay-remove" class="btn" title="Retire les touches sélectionnées du calque (tout le calque si rien n'est sélectionné)">Retirer du calque</button>
+            </div>
+            <p class="muted" style="font-size:11.5px;max-width:34ch">Exemple : ZQSD en blanc sur une vague. Avec un effet animé,
+              Satella calcule alors l'effet elle-même et le diffuse au clavier.</p>
           </div>
         </div>
       </section>
@@ -253,11 +266,16 @@
         <div class="page-head">
           <div class="eyebrow">Sauvegardes</div>
           <h1>Profils</h1>
-          <p class="hint">Un profil enregistre l'éclairage complet et toutes les macros.</p>
+          <p class="hint">Un profil enregistre l'éclairage complet et toutes les macros. Le profil
+            <b>actif</b> suit tes modifications : chaque changement d'éclairage ou de macro y est
+            enregistré automatiquement, rien n'est perdu lors d'une bascule par application.</p>
         </div>
         <div class="btn-row" style="margin-bottom:16px">
-          <input type="text" id="profile-name" placeholder="Nom du profil">
+          <input type="text" id="profile-name" maxlength="60" placeholder="Nom du profil">
           <button id="profile-save" class="btn primary">Sauvegarder le profil actuel</button>
+          <span style="flex:1"></span>
+          <button id="data-import" class="btn" title="Profil partagé (.satella) ou sauvegarde complète">Importer</button>
+          <button id="data-export-all" class="btn" title="Macros, profils, abréviations, turbos, réglages et calibration">Tout sauvegarder</button>
         </div>
         <div class="panel" id="profile-list"></div>
       </section>
@@ -291,8 +309,9 @@
             <span class="muted" id="mem-threshold-val" style="font-family:var(--font-mono)">80%</span>
           </div>
           <p class="muted" style="margin-top:10px;font-size:12.5px">
-            Vérification toutes les minutes. Le nettoyage complet (cache système) demande que
-            Satella soit lancée en administrateur ; sinon seuls les processus sont traités.</p>
+            Vérification toutes les minutes, au plus un nettoyage toutes les 10 minutes.
+            L'application au premier plan (un jeu, par exemple) est épargnée pour ne pas la faire
+            saccader. La purge du cache système demande que Satella soit lancée en administrateur.</p>
         </div>
       </section>
 
@@ -360,6 +379,22 @@
           </div>
           <div class="setting-row">
             <div>
+              <div class="setting-name">Éteindre les LED quand la session est verrouillée</div>
+              <div class="setting-desc">Windows + L éteint le clavier et la souris ; ils se rallument
+                au déverrouillage.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-offlock"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-name">Flash du clavier pour les macros et turbos</div>
+              <div class="setting-desc">Bref éclair vert au démarrage d'une macro, orange pour un turbo,
+                rouge à l'arrêt : tu sais tout de suite si le raccourci a été pris en compte.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-flash"><span></span></label>
+          </div>
+          <div class="setting-row">
+            <div>
               <div class="setting-name">Vérifier les mises à jour au démarrage</div>
               <div class="setting-desc">Recherche discrète une nouvelle version au lancement et
                 propose le téléchargement si besoin.</div>
@@ -370,6 +405,16 @@
         <h2>Empreinte mémoire de Satella</h2>
         <div class="panel">
           <p class="muted" id="set-footprint">Mesure en cours...</p>
+        </div>
+        <h2>Dépannage</h2>
+        <div class="panel">
+          <p class="muted" style="margin-bottom:12px">Le rapport de diagnostic (version, matériel détecté,
+            réglages, fin du journal) est copié dans le presse-papiers, prêt à être collé dans un message.</p>
+          <div class="btn-row">
+            <button class="btn" id="diag-copy">Copier le diagnostic</button>
+            <button class="btn" id="diag-logs">Ouvrir le dossier des journaux</button>
+            <button class="btn" id="diag-data">Ouvrir le dossier des données</button>
+          </div>
         </div>
       </section>
     </main>

@@ -57,7 +57,21 @@ const KB_MODES = {
 
 // Effets logiciels : calculés par le moteur de Satella et diffusés en continu
 // vers le clavier via le mode dynamique (aucune écriture en flash).
-const SOFT_EFFECTS = new Set(['ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient']);
+const SOFT_EFFECTS = new Set(['ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
+  'sysmon', 'audio']);
+
+// Effets natifs animés : avec un calque de touches fixes par-dessus, le
+// clavier ne sait pas les combiner ; Satella les calcule et les diffuse
+// alors elle-même, comme les effets logiciels.
+const ANIMATED_NATIVE = new Set(['breathing', 'wave', 'rainbow', 'reactive', 'sparkle']);
+
+const hasOverlay = (state) => !!(state && state.overlay && Object.keys(state.overlay).length);
+
+// L'état du clavier passe-t-il par le flux temps réel ?
+function isStreamed(state) {
+  if (!state) return false;
+  return SOFT_EFFECTS.has(state.effect) || (ANIMATED_NATIVE.has(state.effect) && hasOverlay(state));
+}
 
 // Carte V2 : id de touche Satella -> emplacement dans le tampon de couleurs.
 // Cette carte a été CALIBRÉE sur le vrai SURMEN GS98 le 2026-08-31
@@ -135,7 +149,9 @@ class DirectBackend extends EventEmitter {
     let devices = [];
     try { devices = HID.devices(); } catch { return this.status(); }
 
-    if (!this.kb) {
+    // Après un échec d'initialisation, on attend une minute avant de
+    // réessayer (pas d'ouverture/sondage/journal toutes les 5 s)
+    if (!this.kb && Date.now() >= (this._kbRetryAt || 0)) {
       // La bonne interface est STRICTEMENT celle de la page d'usage 0xFF1C :
       // le clavier expose aussi des collections clavier/souris standard sur
       // l'interface 1, qui n'acceptent pas les commandes RGB.
@@ -148,8 +164,12 @@ class DirectBackend extends EventEmitter {
           this.kbInfo = info;
           this.kb.on('error', () => this.dropKeyboard());
           this.kbProbe(); // signature V2 + taille du tampon
+          this._kbRetryAt = 0;
+          this._lastKbSig = '';
+          this.emit('connected', 'keyboard');
         } catch (err) {
           this.dropKeyboard();
+          this._kbRetryAt = Date.now() + 60000;
           this.emit('log', 'Clavier détecté mais initialisation impossible : ' + err.message);
         }
       }
@@ -166,6 +186,8 @@ class DirectBackend extends EventEmitter {
           this.mouse = new HID.HID(info.path);
           this.mouseInfo = info;
           this.mouse.on('error', () => this.dropMouse());
+          this._lastMouseSig = '';
+          this.emit('connected', 'mouse');
         } catch (err) {
           this.mouse = null;
           this.emit('log', 'Souris détectée mais ouverture impossible : ' + err.message);
@@ -177,19 +199,42 @@ class DirectBackend extends EventEmitter {
     return this.status();
   }
 
+  // Un périphérique perdu oublie le dernier état écrit : à la reconnexion,
+  // l'état courant sera forcément réécrit.
   dropKeyboard() {
     this.stopWorker();
+    clearTimeout(this._flashTimer);
+    this._flashTimer = null;
     try { if (this.kb) this.kb.close(); } catch { /* ignore */ }
     this.kb = null;
     this.kbStreaming = false;
+    this._lastKbSig = '';
     this.emit('status', this.status());
   }
 
   dropMouse() {
     try { if (this.mouse) this.mouse.close(); } catch { /* ignore */ }
     this.mouse = null;
+    this._lastMouseSig = '';
     this.emit('status', this.status());
   }
+
+  // Force la réécriture complète au prochain apply*()
+  forceReapply() {
+    this._lastKbSig = '';
+    this._lastMouseSig = '';
+  }
+
+  // Après une sortie de veille, les poignées USB peuvent être mortes sans
+  // erreur visible : on ferme tout et on redétecte.
+  resetHandles() {
+    this.dropKeyboard();
+    this.dropMouse();
+    this._kbRetryAt = 0;
+    return this.detect();
+  }
+
+  isStreamed(state) { return isStreamed(state); }
 
   // ---- Bas niveau clavier (protocole EVision V2) --------------------------
   // Une requête = un paquet de 64 octets, une réponse avec code d'erreur.
@@ -333,11 +378,15 @@ class DirectBackend extends EventEmitter {
     if (!this.kb) return;
     clearTimeout(this._kbTimer);
     this._kbTimer = setTimeout(() => {
+      if (!this.kb) return;
       const sig = JSON.stringify([state.effect, state.baseColor, state.speed,
-        state.brightness, state.direction, state.colors]);
+        state.brightness, state.direction, state.colors, state.overlay || {}]);
       if (sig === this._lastKbSig) return;
+      // Signature retenue tout de suite (pas de double envoi pendant
+      // l'écriture), oubliée si l'écriture échoue
       this._lastKbSig = sig;
       this.pushKeyboard(state).catch((err) => {
+        this._lastKbSig = '';
         this.emit('log', 'Erreur écriture clavier : ' + err.message);
         this.dropKeyboard();
       });
@@ -350,8 +399,9 @@ class DirectBackend extends EventEmitter {
     const [r, g, b] = hexToRgb(state.baseColor);
     const dirLR = state.direction === 'rl' ? 1 : 0;
 
-    // Effets logiciels : le flux d'images prend le relais (streamKeyboard)
-    if (SOFT_EFFECTS.has(state.effect)) {
+    // Effets logiciels (ou effet natif + calque) : le flux d'images prend
+    // le relais (streamKeyboard)
+    if (isStreamed(state)) {
       this._lastFallback = null; // repartir d'une image complète
       this.kbStreaming = true;
       return;
@@ -370,14 +420,16 @@ class DirectBackend extends EventEmitter {
         this.kbSetMode(KB_MODES.static, 0, 3, 0, 0, 0, 0, 0);
         break;
       case 'static': {
-        const hasPerKey = state.colors && Object.keys(state.colors).length > 0;
+        // Le calque s'ajoute simplement aux couleurs par touche
+        const colors = { ...(state.colors || {}), ...(state.overlay || {}) };
+        const hasPerKey = Object.keys(colors).length > 0;
         if (!hasPerKey) {
           this.kbSetMode(KB_MODES.static, bright, 3, 0, 0, r, g, b);
         } else {
           // Mode « Custom » : chaque touche a sa couleur (colorset 0)
           const perSlot = new Array(this.kbMapSize || 128).fill(null);
           for (const key of Object.keys(this.keyMap)) {
-            const hex = state.colors[key] || state.baseColor;
+            const hex = colors[key] || state.baseColor;
             perSlot[this.keyMap[key]] = hexToRgb(hex);
           }
           this.kbWriteCustomColors(perSlot);
@@ -419,7 +471,11 @@ class DirectBackend extends EventEmitter {
       if (sig === this._lastMouseSig) return;
       this._lastMouseSig = sig;
       try { this.pushMouse(state); }
-      catch (err) { this.emit('log', 'Erreur écriture souris : ' + err.message); this.dropMouse(); }
+      catch (err) {
+        this._lastMouseSig = '';
+        this.emit('log', 'Erreur écriture souris : ' + err.message);
+        this.dropMouse();
+      }
     }, 250);
   }
 
@@ -453,8 +509,10 @@ class DirectBackend extends EventEmitter {
     this._worker = new Worker(path.join(__dirname, 'stream-worker.js'), {
       workerData: { path: this.kbInfo.path },
     });
+    const worker = this._worker;
     this._workerPaused = false;
-    this._worker.on('message', (msg) => {
+    worker.on('message', (msg) => {
+      if (worker !== this._worker) return; // ancien thread en cours d'arrêt
       if (msg.type === 'error') {
         this.emit('log', 'Flux clavier (thread) : ' + msg.message + ' ; repli sur le canal principal');
         this._workerFailedAt = Date.now();
@@ -464,7 +522,15 @@ class DirectBackend extends EventEmitter {
         this._pauseResolve = null;
       }
     });
-    this._worker.on('exit', () => { this._worker = null; });
+    worker.on('error', (err) => {
+      this.emit('log', 'Thread de flux arrêté : ' + err.message);
+      if (worker === this._worker) {
+        this._workerFailedAt = Date.now();
+        this.stopWorker();
+      }
+    });
+    // La sortie d'un ancien thread ne doit pas effacer son remplaçant
+    worker.on('exit', () => { if (worker === this._worker) this._worker = null; });
   }
 
   pauseWorker() {
@@ -555,10 +621,11 @@ class DirectBackend extends EventEmitter {
   // Allume un seul emplacement via le mode dynamique (aucune écriture en flash).
   // Le clavier quitte le mode dynamique s'il n'est pas rafraîchi : un minuteur
   // réémet l'allumage tant que la calibration est en cours.
-  kbCalibLight(slot) {
+  async kbCalibLight(slot) {
     if (!this.kb) throw new Error('clavier non connecté');
     // Le flux d'effets ne doit pas écrire en même temps que la calibration
-    if (this._worker && !this._workerPaused) this.pauseWorker();
+    if (this._worker && !this._workerPaused) await this.pauseWorker();
+    if (!this.kb) throw new Error('clavier non connecté');
     this._calibSlot = slot;
     this.kbCalibPush();
     if (!this._calibTimer) {
@@ -591,6 +658,35 @@ class DirectBackend extends EventEmitter {
     this._lastKbSig = '';
   }
 
+  // ---- Flash bref (retour visuel des macros et turbos) --------------------
+  // Une seule image en mode dynamique (aucune écriture en flash) : sans
+  // rafraîchissement, le clavier revient de lui-même à son effet ; on
+  // quitte quand même le mode dynamique explicitement après `ms`.
+  kbFlash(rgb, ms = 220) {
+    if (!this.kb || this.kbStreaming || this._calibTimer) return;
+    const mapSize = this.kbMapSize || 128;
+    const data = new Array(3 * mapSize).fill(0);
+    for (const key of Object.keys(this.keyMap)) {
+      const slot = this.keyMap[key] * 3;
+      data[slot] = rgb[0];
+      data[slot + 1] = rgb[1];
+      data[slot + 2] = rgb[2];
+    }
+    try {
+      this.kbWrite(KB_CMD_DYNAMIC, 0, data);
+    } catch (err) {
+      this.emit('log', 'Flash clavier impossible : ' + err.message);
+      this.dropKeyboard();
+      return;
+    }
+    clearTimeout(this._flashTimer);
+    this._flashTimer = setTimeout(() => {
+      this._flashTimer = null;
+      if (!this.kb || this.kbStreaming || this._calibTimer) return;
+      try { this.kbQuery(KB_CMD_DYNAMIC_END); } catch { /* déjà sorti */ }
+    }, ms);
+  }
+
   // ---- Diagnostic (page Périphériques) ------------------------------------
   // Envois bruts pour identifier les valeurs comprises par chaque firmware.
   testKeyboard(r, g, b) {
@@ -609,10 +705,12 @@ class DirectBackend extends EventEmitter {
     this.stopWorker();
     clearTimeout(this._kbTimer);
     clearTimeout(this._mouseTimer);
+    clearTimeout(this._flashTimer);
     clearInterval(this._calibTimer);
+    this._calibTimer = null;
     this.dropKeyboard();
     this.dropMouse();
   }
 }
 
-module.exports = { DirectBackend, KB_LED_MAP, SOFT_EFFECTS };
+module.exports = { DirectBackend, KB_LED_MAP, SOFT_EFFECTS, ANIMATED_NATIVE, isStreamed };

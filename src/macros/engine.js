@@ -5,34 +5,54 @@ const { EventEmitter } = require('events');
 const input = require('./input');
 const { UIOHOOK_TO_NAME, toAccelerator } = require('./keys');
 
+// Le module natif d'écoute globale n'est chargé qu'au premier besoin
+// (effet réactif, enregistrement, expansion de texte...)
 let uiohook = null;
 let uiohookError = null;
-try {
-  uiohook = require('uiohook-napi').uIOhook;
-} catch (err) {
-  uiohookError = err;
+let uiohookTried = false;
+function loadHook() {
+  if (!uiohookTried) {
+    uiohookTried = true;
+    try {
+      uiohook = require('uiohook-napi').uIOhook;
+    } catch (err) {
+      uiohookError = err;
+    }
+  }
+  return uiohook;
 }
+const hookAvailable = () => !!loadHook();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Profondeur maximale d'appels « Exécuter macro » imbriqués (filet de
+// sécurité en plus de la détection de cycle)
+const MAX_DEPTH = 16;
+
 class MacroEngine extends EventEmitter {
-  constructor({ globalShortcut }) {
+  // `injector` : module d'injection d'entrées (remplaçable pour les tests)
+  constructor({ globalShortcut, injector = input }) {
     super();
     this.globalShortcut = globalShortcut;
+    this.input = injector;
     this.macros = [];
     this.playing = new Map(); // id -> {cancelled}
     this.recording = false;
     this.recordBuffer = [];
-    this.recordOpts = { mouse: true, moves: false };
+    this.recordOpts = { mouse: true, moves: false, clickPositions: false };
     this.lastEventTime = 0;
     this.hookStarted = false;
     this.suppressRecord = false;
   }
 
+  get busy() { return this.playing.size > 0; }
+
   // ---- Déclencheurs -------------------------------------------------------
+  // Renvoie la liste des raccourcis refusés (déjà pris par une autre
+  // application, ou invalides).
   setMacros(macros) {
     this.macros = macros || [];
-    this.registerTriggers();
+    return this.registerTriggers();
   }
 
   registerTriggers() {
@@ -44,44 +64,60 @@ class MacroEngine extends EventEmitter {
         const ok = this.globalShortcut.register(macro.trigger.accelerator, () => {
           if (this.recording) return; // pas de déclenchement pendant un enregistrement
           if (this.playing.has(macro.id)) this.stop(macro.id);
-          else this.play(macro.id);
+          else this.play(macro.id).catch((err) => this.emit('play-error', { id: macro.id, message: err.message }));
         });
-        if (!ok) errors.push({ id: macro.id, accelerator: macro.trigger.accelerator });
+        if (!ok) errors.push({ kind: 'macro', id: macro.id, accelerator: macro.trigger.accelerator });
       } catch (err) {
-        errors.push({ id: macro.id, accelerator: macro.trigger.accelerator, error: err.message });
+        errors.push({ kind: 'macro', id: macro.id, accelerator: macro.trigger.accelerator, error: err.message });
       }
     }
     return errors;
   }
 
   // ---- Lecture ------------------------------------------------------------
-  async play(id) {
-    const macro = this.macros.find((m) => m.id === id);
+  // `draft` : version non sauvegardée de la macro (bouton « Tester »).
+  async play(id, draft = null) {
+    const macro = draft || this.macros.find((m) => m.id === id);
     if (!macro) throw new Error('Macro introuvable');
-    if (!input.available) throw new Error("Injection d'entrées indisponible : " + (input.loadError && input.loadError.message));
-    if (this.playing.has(id)) return;
+    if (!this.input.available) throw new Error("Injection d'entrées indisponible : " + (this.input.loadError && this.input.loadError.message));
+    if (this.playing.has(macro.id)) return;
 
-    const ctx = { cancelled: false };
-    this.playing.set(id, ctx);
-    this.emit('play-state', { id, playing: true });
+    const ctx = { cancelled: false, keys: new Set(), buttons: new Set() };
+    this.playing.set(macro.id, ctx);
+    this.emit('play-state', { id: macro.id, playing: true });
 
-    const opts = macro.options || {};
-    const speed = Math.max(0.1, Math.min(10, opts.speed || 1));
-    const repeat = opts.loopInfinite ? Infinity : Math.max(1, opts.repeat || 1);
+    const o = macro.options || {};
+    const opts = {
+      speed: Math.max(0.1, Math.min(10, o.speed || 1)),
+      holdMs: Math.max(0, Math.min(1000, o.holdMs || 0)),
+      jitter: Math.max(0, Math.min(50, o.jitter || 0)) / 100,
+    };
+    const repeat = o.loopInfinite ? Infinity : Math.max(1, o.repeat || 1);
 
     try {
       for (let i = 0; i < repeat && !ctx.cancelled; i++) {
-        await this.runSteps(macro.steps || [], ctx, speed);
-        if (opts.repeatDelayMs && i < repeat - 1 && !ctx.cancelled) {
-          await this.cancellableSleep(opts.repeatDelayMs / speed, ctx);
+        await this.runSteps(macro.steps || [], ctx, opts, [macro.id]);
+        if (o.repeatDelayMs && i < repeat - 1 && !ctx.cancelled) {
+          await this.cancellableSleep(this.duration(o.repeatDelayMs, opts), ctx);
         }
       }
     } catch (err) {
-      this.emit('play-error', { id, message: err.message });
+      this.emit('play-error', { id: macro.id, message: err.message });
     } finally {
-      this.playing.delete(id);
-      this.emit('play-state', { id, playing: false });
+      // Une macro arrêtée entre un appui et son relâchement ne doit jamais
+      // laisser une touche ou un bouton enfoncé dans Windows
+      this.releaseAll(ctx);
+      this.playing.delete(macro.id);
+      this.emit('play-state', { id: macro.id, playing: false });
     }
+  }
+
+  // Durée ajustée à la vitesse de lecture, avec variation aléatoire
+  // (« humanisation ») si demandée
+  duration(ms, opts) {
+    let d = ms / opts.speed;
+    if (opts.jitter) d *= 1 + (Math.random() * 2 - 1) * opts.jitter;
+    return Math.max(0, d);
   }
 
   async cancellableSleep(ms, ctx) {
@@ -93,41 +129,95 @@ class MacroEngine extends EventEmitter {
     }
   }
 
-  async runSteps(steps, ctx, speed) {
+  press(ctx, key) {
+    this.input.keyDown(key);
+    ctx.keys.add(key);
+  }
+
+  release(ctx, key) {
+    this.input.keyUp(key);
+    ctx.keys.delete(key);
+  }
+
+  pressButton(ctx, button) {
+    this.input.mouseButton(button, false);
+    ctx.buttons.add(button);
+  }
+
+  releaseButton(ctx, button) {
+    this.input.mouseButton(button, true);
+    ctx.buttons.delete(button);
+  }
+
+  releaseAll(ctx) {
+    for (const key of [...ctx.keys].reverse()) {
+      try { this.input.keyUp(key); } catch { /* touche inconnue */ }
+    }
+    for (const button of ctx.buttons) {
+      try { this.input.mouseButton(button, true); } catch { /* ignore */ }
+    }
+    ctx.keys.clear();
+    ctx.buttons.clear();
+  }
+
+  // Frappe avec maintien optionnel : certains jeux ne voient pas un appui
+  // de 0 ms (ils lisent l'état du clavier une fois par image)
+  async tap(ctx, key, modifiers, holdMs) {
+    for (const m of modifiers) this.press(ctx, m);
+    this.press(ctx, key);
+    if (holdMs > 0) await sleep(holdMs);
+    this.release(ctx, key);
+    for (const m of [...modifiers].reverse()) this.release(ctx, m);
+  }
+
+  async click(ctx, button, count, holdMs) {
+    for (let i = 0; i < count && !ctx.cancelled; i++) {
+      this.pressButton(ctx, button);
+      if (holdMs > 0) await sleep(holdMs);
+      this.releaseButton(ctx, button);
+      if (holdMs > 0 && i < count - 1) await sleep(holdMs);
+    }
+  }
+
+  // `stack` : macros en cours d'exécution (de la racine à la courante),
+  // pour refuser les cycles A -> B -> A.
+  async runSteps(steps, ctx, opts, stack) {
     for (const step of steps) {
       if (ctx.cancelled) return;
       switch (step.type) {
-        case 'keyDown': input.keyDown(step.key); break;
-        case 'keyUp': input.keyUp(step.key); break;
+        case 'keyDown': this.press(ctx, step.key); break;
+        case 'keyUp': this.release(ctx, step.key); break;
         case 'keyTap':
-          input.keyTap(step.key, step.modifiers || []);
+          await this.tap(ctx, step.key, step.modifiers || [], opts.holdMs);
           break;
-        case 'text': input.typeText(step.value || ''); break;
-        case 'delay': await this.cancellableSleep((step.ms || 0) / speed, ctx); break;
-        case 'mouseDown': input.mouseButton(step.button || 'left', false); break;
-        case 'mouseUp': input.mouseButton(step.button || 'left', true); break;
-        case 'mouseClick': input.mouseClick(step.button || 'left', step.count || 1); break;
-        case 'mouseMove': input.mouseMove(step.x || 0, step.y || 0, !!step.relative); break;
-        case 'mouseWheel': input.mouseWheel(step.delta || 120, !!step.horizontal); break;
+        case 'text': this.input.typeTextLines(step.value || ''); break;
+        case 'delay': await this.cancellableSleep(this.duration(step.ms || 0, opts), ctx); break;
+        case 'mouseDown': this.pressButton(ctx, step.button || 'left'); break;
+        case 'mouseUp': this.releaseButton(ctx, step.button || 'left'); break;
+        case 'mouseClick': await this.click(ctx, step.button || 'left', step.count || 1, opts.holdMs); break;
+        case 'mouseMove': this.input.mouseMove(step.x || 0, step.y || 0, !!step.relative); break;
+        case 'mouseWheel': this.input.mouseWheel(step.delta || 120, !!step.horizontal); break;
         case 'loop': {
           const count = Math.max(1, step.count || 1);
           for (let i = 0; i < count && !ctx.cancelled; i++) {
-            await this.runSteps(step.steps || [], ctx, speed);
+            await this.runSteps(step.steps || [], ctx, opts, stack);
           }
           break;
         }
         case 'runMacro': {
           const sub = this.macros.find((m) => m.id === step.macroId);
-          if (sub && sub.id !== step.parentGuard) {
-            await this.runSteps(sub.steps || [], ctx, speed);
+          if (!sub) break;
+          if (stack.includes(sub.id) || stack.length >= MAX_DEPTH) {
+            throw new Error(`boucle infinie évitée : « ${sub.name || sub.id} » finit par s'appeler elle-même`);
           }
+          await this.runSteps(sub.steps || [], ctx, opts, [...stack, sub.id]);
           break;
         }
         default: break;
       }
       // Petit délai par défaut entre les étapes pour la fiabilité
       if (step.type !== 'delay' && !ctx.cancelled) {
-        await sleep(Math.max(2, (step.gapMs !== undefined ? step.gapMs : 15) / speed));
+        await sleep(Math.max(2, this.duration(step.gapMs !== undefined ? step.gapMs : 15, opts)));
       }
     }
   }
@@ -143,7 +233,7 @@ class MacroEngine extends EventEmitter {
 
   // ---- Enregistreur -------------------------------------------------------
   ensureHook() {
-    if (!uiohook) throw new Error("Module d'écoute globale indisponible : " + (uiohookError && uiohookError.message));
+    if (!loadHook()) throw new Error("Module d'écoute globale indisponible : " + (uiohookError && uiohookError.message));
     if (!this._listenersAttached) {
       uiohook.on('keydown', (e) => this.onRecordKey(e, false));
       uiohook.on('keyup', (e) => this.onRecordKey(e, true));
@@ -151,8 +241,17 @@ class MacroEngine extends EventEmitter {
       uiohook.on('mouseup', (e) => this.onRecordMouse(e, 'up'));
       uiohook.on('wheel', (e) => this.onRecordWheel(e));
       uiohook.on('mousemove', (e) => this.onRecordMove(e));
-      uiohook.on('keydown', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: true }));
-      uiohook.on('keyup', (e) => this.emit('key-activity', { key: UIOHOOK_TO_NAME[e.keycode], down: false }));
+      const activity = (e, down) => ({
+        key: UIOHOOK_TO_NAME[e.keycode],
+        down,
+        shift: !!e.shiftKey,
+        ctrl: !!e.ctrlKey,
+        alt: !!e.altKey,
+        meta: !!e.metaKey,
+      });
+      uiohook.on('keydown', (e) => this.emit('key-activity', activity(e, true)));
+      uiohook.on('keyup', (e) => this.emit('key-activity', activity(e, false)));
+      uiohook.on('mousedown', () => this.emit('mouse-activity'));
       this._listenersAttached = true;
     }
     if (!this.hookStarted) {
@@ -195,6 +294,11 @@ class MacroEngine extends EventEmitter {
     if (!this.recording || !this.recordOpts.mouse) return;
     const buttons = { 1: 'left', 2: 'right', 3: 'middle', 4: 'x1', 5: 'x2' };
     const button = buttons[e.button] || 'left';
+    // Option « clics à leur position » : le curseur revient à l'endroit
+    // du clic enregistré avant d'appuyer
+    if (dir === 'down' && this.recordOpts.clickPositions && !this.recordOpts.moves) {
+      this.pushRecordStep({ type: 'mouseMove', x: e.x, y: e.y, relative: false, gapMs: 0 });
+    }
     this.pushRecordStep({
       type: dir === 'down' ? 'mouseDown' : 'mouseUp',
       button, x: e.x, y: e.y, gapMs: 0,
@@ -203,7 +307,12 @@ class MacroEngine extends EventEmitter {
 
   onRecordWheel(e) {
     if (!this.recording || !this.recordOpts.mouse) return;
-    this.pushRecordStep({ type: 'mouseWheel', delta: (e.rotation || 1) * -120, gapMs: 0 });
+    this.pushRecordStep({
+      type: 'mouseWheel',
+      delta: (e.rotation || 1) * -120,
+      horizontal: e.direction === 4,
+      gapMs: 0,
+    });
   }
 
   onRecordMove(e) {
@@ -216,7 +325,11 @@ class MacroEngine extends EventEmitter {
 
   startRecording(opts = {}) {
     this.ensureHook();
-    this.recordOpts = { mouse: opts.mouse !== false, moves: !!opts.moves };
+    this.recordOpts = {
+      mouse: opts.mouse !== false,
+      moves: !!opts.moves,
+      clickPositions: !!opts.clickPositions,
+    };
     this.recordBuffer = [];
     this.lastEventTime = 0;
     this.recording = true;
@@ -262,4 +375,4 @@ class MacroEngine extends EventEmitter {
   }
 }
 
-module.exports = { MacroEngine, toAccelerator, uiohookAvailable: !!uiohook };
+module.exports = { MacroEngine, toAccelerator, hookAvailable };
