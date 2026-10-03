@@ -11,6 +11,8 @@ dépôt MaiToxx/satella). Les **mises à jour sont automatiques** : le bouton
 et l'installe au redémarrage de l'app.
 
 Développement : `npm install` puis `npm start` dans ce dossier (Node.js requis).
+Quitte d'abord la version installée (zone de notification > Quitter) : une
+seule instance de Satella peut tourner à la fois.
 Tests : `npm test` (aucun matériel ni module natif nécessaire).
 
 Publier une version, au choix :

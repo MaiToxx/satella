@@ -35,7 +35,11 @@ const sanitize = require('./src/shared/sanitize');
 // Windows) réaffiche simplement la fenêtre existante au lieu de piloter
 // le même clavier en parallèle.
 const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) app.quit();
+if (!gotLock) {
+  console.log('Satella tourne déjà (zone de notification) : sa fenêtre est réaffichée. '
+    + 'Pour lancer une version de développement, quitte d\'abord l\'autre instance.');
+  app.quit();
+}
 
 let win = null;
 let tray = null;

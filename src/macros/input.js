@@ -28,7 +28,7 @@ const SM_XVIRTUALSCREEN = 76;
 const SM_YVIRTUALSCREEN = 77;
 const SM_CXVIRTUALSCREEN = 78;
 const SM_CYVIRTUALSCREEN = 79;
-const MAPVK_VK_TO_VSC = 0;
+const MAPVK_VK_TO_VSC_EX = 4;
 
 let INPUT_SIZE = 0;
 
@@ -76,21 +76,24 @@ function sendMouse(events) {
   return SendInput(inputs.length, inputs, INPUT_SIZE);
 }
 
-function keyFlags(name, up) {
-  let flags = EXTENDED.has(name) ? KEYEVENTF_EXTENDEDKEY : 0;
-  if (up) flags |= KEYEVENTF_KEYUP;
-  return flags;
-}
-
 // Scancode matériel de la touche : beaucoup de jeux (DirectInput, Raw
 // Input) lisent le scancode et ignorent une frappe qui n'en a pas.
+// MAPVK_VK_TO_VSC_EX donne aussi le préfixe E0 des touches étendues
+// (multimédia, flèches...) ; une touche à préfixe E1 (Pause) est envoyée
+// sans scancode plutôt qu'avec un code trompeur.
 const scanCache = new Map();
 function scanFor(vk) {
-  if (!MapVirtualKeyW) return 0;
   if (!scanCache.has(vk)) {
-    let scan = 0;
-    try { scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xff; } catch { /* inconnu */ }
-    scanCache.set(vk, scan);
+    let res = { scan: 0, extended: false };
+    if (MapVirtualKeyW) {
+      try {
+        const ex = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX);
+        const prefix = (ex >> 8) & 0xff;
+        if (prefix === 0xe0) res = { scan: ex & 0xff, extended: true };
+        else if (prefix === 0) res = { scan: ex & 0xff, extended: false };
+      } catch { /* inconnu */ }
+    }
+    scanCache.set(vk, res);
   }
   return scanCache.get(vk);
 }
@@ -101,15 +104,17 @@ function vkFor(name) {
   return vk;
 }
 
-function keyDown(name) {
+function keyEvent(name, up) {
   const vk = vkFor(name);
-  sendKeyboard([{ vk, scan: scanFor(vk), flags: keyFlags(name, false) }]);
+  const { scan, extended } = scanFor(vk);
+  let flags = EXTENDED.has(name) || extended ? KEYEVENTF_EXTENDEDKEY : 0;
+  if (up) flags |= KEYEVENTF_KEYUP;
+  sendKeyboard([{ vk, scan, flags }]);
 }
 
-function keyUp(name) {
-  const vk = vkFor(name);
-  sendKeyboard([{ vk, scan: scanFor(vk), flags: keyFlags(name, true) }]);
-}
+function keyDown(name) { keyEvent(name, false); }
+
+function keyUp(name) { keyEvent(name, true); }
 
 function keyTap(name, modifiers = []) {
   // Vérifie toutes les touches avant d'appuyer : une touche inconnue ne
