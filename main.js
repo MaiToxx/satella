@@ -1323,13 +1323,23 @@ app.on('second-instance', () => revealWindow());
 
 app.whenReady().then(() => {
   if (!gotLock) return;
-  setupEngines();
-  setupUpdater();
-  setupIpc();
-  setupPowerEvents();
-  setupDisplayMedia();
-  createWindow();
-  createTray();
+  // Un échec au démarrage ne doit pas laisser un processus invisible qui
+  // garderait le verrou d'instance unique (plus aucun lancement possible)
+  try {
+    setupEngines();
+    setupUpdater();
+    setupIpc();
+    setupPowerEvents();
+    setupDisplayMedia();
+    createWindow();
+    createTray();
+  } catch (err) {
+    console.error('Démarrage impossible :', err && err.stack ? err.stack : err);
+    dialog.showErrorBox('Satella — démarrage impossible',
+      `${err && err.message ? err.message : err}\n\nJournal : ${logger.dir || app.getPath('userData')}`);
+    app.exit(1);
+    return;
+  }
 
   // Vérification discrète des mises à jour au démarrage
   if (app.isPackaged && settings.autoCheckUpdates) {
