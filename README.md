@@ -25,6 +25,10 @@ GitHub) et augmenté `version` dans package.json, au choix :
   qui lance le même workflow ;
 - ou à la main : `npx electron-builder --win --publish always` (variable GH_TOKEN requise).
 
+Pour corriger après coup le texte d'une release : modifier
+`build/release-notes.md` sur `main`, puis onglet Actions > Notes de version >
+« Run workflow ».
+
 Satella ne tourne qu'en un seul exemplaire : relancer l'application
 (raccourci, démarrage de Windows) réaffiche simplement la fenêtre existante.
 
