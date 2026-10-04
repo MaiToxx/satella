@@ -19,6 +19,7 @@
 const { EventEmitter } = require('events');
 const path = require('path');
 const { Worker } = require('worker_threads');
+const { isNativeCompatible } = require('../shared/effects');
 
 let HID = null;
 let hidError = null;
@@ -72,10 +73,12 @@ const kbConfigSig = (state) => JSON.stringify([state.effect, state.baseColor, st
   state.brightness, state.direction, state.colors, state.overlay || {}]);
 
 // L'état du clavier passe-t-il par le flux temps réel ? (`live` : calques
-// temporaires affichés par-dessus, comme les témoins Verr. Maj ou le minuteur)
+// temporaires affichés par-dessus, comme les témoins Verr. Maj ou le minuteur ;
+// effet natif réglé au-delà de ce que le clavier sait faire seul)
 function isStreamed(state) {
   if (!state) return false;
-  return !!state.live || SOFT_EFFECTS.has(state.effect) || (ANIMATED_NATIVE.has(state.effect) && hasOverlay(state));
+  return !!state.live || SOFT_EFFECTS.has(state.effect)
+    || (ANIMATED_NATIVE.has(state.effect) && (hasOverlay(state) || !isNativeCompatible(state)));
 }
 
 // Carte V2 : id de touche Satella -> emplacement dans le tampon de couleurs.

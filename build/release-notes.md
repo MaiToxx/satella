@@ -1,5 +1,6 @@
 ## Nouveautés
-- Turbo « tant que maintenu » : le clic (ou la touche) se répète tant que tu maintiens un bouton de la souris (bouton latéral, molette, clic droit) ou une touche, et s'arrête dès que tu relâches. Idéal pour le clic automatique en jeu.
-- Vague de couleurs : nouveau mode « Respiration », où tout le clavier passe en douceur d'une couleur de ta palette à la suivante.
-- Profils : option « Sans abréviations » pour mettre l'expansion de texte en pause tant que le profil est actif (pratique pour les jeux).
-- Aide des raccourcis (Ctrl+/, ou depuis la palette et les Paramètres) : tous les raccourcis de Satella et ceux que tu as réglés, au même endroit.
+- Tous les effets du clavier sont personnalisables : un nouveau panneau « Réglages de l'effet » apparaît sous les effets.
+  - Source des couleurs, selon l'effet : couleur unique, deux couleurs, palette (2 à 6 couleurs au choix) ou arc-en-ciel. Par exemple des flammes bleues, une vague aux couleurs de ta palette, une pluie multicolore ou une respiration qui change de couleur à chaque souffle.
+  - Réglages propres à chaque effet : profondeur de la respiration, largeur des bandes de la vague, durée et rayon de la lueur du réactif, épaisseur et portée de l'onde de choc, densité des étincelles et de la pluie, longueur des gouttes, hauteur des flammes, largeur du balayage, nombre de bras du tourbillon, touches allumées du disco, sensibilité du visualiseur audio, saturation de l'ambiance écran…
+  - Bouton « Réglages par défaut » pour revenir à l'effet d'origine. Les réglages sont enregistrés dans le profil actif.
+- Un effet natif (vague, respiration, réactif…) réglé autrement que par défaut est calculé par Satella et diffusé au clavier : Satella doit alors rester ouverte (même réduite dans la zone de notification).

@@ -62,6 +62,15 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   fréquence), **Ambiance écran** (le clavier reprend les couleurs de l'écran
   principal, zone par zone) et **Carte de chaleur** (chaque touche du bleu au
   rouge selon son utilisation, d'après les statistiques de frappe).
+- **Chaque effet est personnalisable** (panneau « Réglages de l'effet ») :
+  source des couleurs selon l'effet (couleur unique, deux couleurs, palette,
+  arc-en-ciel) et réglages propres — profondeur de la respiration, largeur des
+  bandes, durée et rayon de la lueur du réactif, épaisseur et portée de l'onde,
+  densité des étincelles et de la pluie, longueur des gouttes, hauteur des
+  flammes, largeur du balayage, nombre de bras du tourbillon, sensibilité
+  audio, saturation de l'ambiance écran… Un bouton remet l'effet par défaut.
+  Un effet natif réglé autrement que par défaut est calculé par Satella et
+  diffusé au clavier (Satella doit rester ouverte, même réduite).
 - **Calque** : des touches fixes par-dessus n'importe quel effet (par exemple
   ZQSD en blanc sur une vague). Avec un effet animé, Satella calcule l'effet
   elle-même et le diffuse au clavier.
@@ -216,6 +225,7 @@ preload.js                    Pont sécurisé UI <-> principal
 src/store.js                  Persistance JSON (cache, écriture atomique, .bak)
 src/shared/layout.js          Disposition GS98 + zones PC365A
 src/shared/sanitize.js        Validation des fichiers importés
+src/shared/effects.js         Réglages personnalisables de chaque effet
 src/led/engine.js             Moteur d'effets (30 img/s), calque, flash
 src/led/direct.js             Pilote USB direct (EVision V2 + Areson)
 src/led/stream-worker.js      Thread du flux temps réel vers le clavier

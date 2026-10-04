@@ -65,7 +65,6 @@ const EFFECT_HINTS = {
   heatmap: 'Chaque touche prend la couleur de son usage : bleu = rarement, rouge = très souvent. Seul le nombre d\'appuis par touche est compté, sur ce PC.',
   palette: 'Vague : tes couleurs défilent dans la direction choisie. Respiration : tout le clavier passe d\'une couleur à l\'autre. Choisis de 2 à 6 couleurs, ou une palette toute prête.',
 };
-const COLOR2_EFFECTS = ['gradient', 'audio'];
 
 // Vague de couleurs : palettes toutes prêtes (2 à 6 couleurs)
 const PALETTE_PRESETS = [
@@ -693,13 +692,17 @@ function bindSlider(sel, valSel, device, prop) {
 
 function syncToolbars() {
   const fx = STATE.keyboard.effect;
+  // Couleur 2 et palette selon la source de couleurs choisie pour l'effet
+  const colorMode = FXS.fxSettings(STATE.keyboard, fx).colors;
   $$('#kb-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === fx));
   $$('#mouse-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === STATE.mouse.effect));
   $('#kb-dir-group').style.display = fx === 'wave' || (fx === 'palette' && STATE.keyboard.paletteMode !== 'breathe') ? '' : 'none';
-  $('#kb-pal-label').style.display = fx === 'palette' ? '' : 'none';
-  $('#kb-palette').style.display = fx === 'palette' ? '' : 'none';
-  if (fx === 'palette') renderPaletteEditor();
-  const showC2 = COLOR2_EFFECTS.includes(fx) ? '' : 'none';
+  const showPal = fx === 'palette' || colorMode === 'palette';
+  $('#kb-pal-label').style.display = showPal ? '' : 'none';
+  $('#kb-palette').style.display = showPal ? '' : 'none';
+  if (showPal) renderPaletteEditor();
+  renderFxSettings();
+  const showC2 = colorMode === 'duo' ? '' : 'none';
   $('#kb-color2-label').style.display = showC2;
   $('#kb-color2').style.display = showC2;
   $('#kb-color2').value = STATE.keyboard.color2 || '#ff00d4';
@@ -734,6 +737,71 @@ function syncToolbars() {
   setAccent();
 }
 
+/* ---- Réglages de l'effet (src/shared/effects.js) ---- */
+const FXS = window.SATELLA_EFFECTS;
+
+function setFxSetting(id, value) {
+  const effect = STATE.keyboard.effect;
+  const all = { ...(STATE.keyboard.fx || {}) };
+  all[effect] = { ...(all[effect] || {}), [id]: value };
+  STATE.keyboard.fx = all;
+  window.satella.led.set('keyboard', { fx: all });
+}
+
+function renderFxSettings() {
+  const effect = STATE.keyboard.effect;
+  const def = FXS.EFFECT_SETTINGS[effect];
+  const group = $('#kb-fx-group');
+  const box = $('#kb-fx-settings');
+  if (!def || (def.colors.length <= 1 && !def.params.length)) {
+    group.style.display = 'none';
+    return;
+  }
+  group.style.display = '';
+  const s = FXS.fxSettings(STATE.keyboard, effect);
+  const custom = STATE.keyboard.fx && STATE.keyboard.fx[effect] && Object.keys(STATE.keyboard.fx[effect]).length > 0;
+  let html = '';
+  if (def.colors.length > 1) {
+    html += `<label class="fx-lbl">Couleurs</label>
+      <select id="fx-colors">${def.colors.map((c) => `<option value="${c}" ${s.colors === c ? 'selected' : ''}>${esc(FXS.COLOR_MODES[c])}</option>`).join('')}</select>`;
+  }
+  for (const p of def.params) {
+    html += `<label class="fx-lbl">${esc(p.label)} <span class="val" data-val="${p.id}">${s[p.id]}${esc(p.unit)}</span></label>
+      <input type="range" class="fx-param" data-id="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${s[p.id]}">`;
+  }
+  if (custom) html += '<button class="btn small" id="fx-reset">Réglages par défaut</button>';
+  if (def.native && !FXS.isNativeCompatible(STATE.keyboard)) {
+    html += '<p class="fx-hint">Réglage personnalisé : Satella calcule cet effet elle-même et le diffuse au clavier (elle doit rester ouverte, même réduite).</p>';
+  }
+  box.innerHTML = html;
+  const colors = $('#fx-colors');
+  if (colors) {
+    colors.addEventListener('change', () => {
+      setFxSetting('colors', colors.value);
+      syncToolbars();
+    });
+  }
+  box.querySelectorAll('.fx-param').forEach((input) => {
+    const p = def.params.find((x) => x.id === input.dataset.id);
+    input.addEventListener('input', () => {
+      box.querySelector(`[data-val="${p.id}"]`).textContent = input.value + p.unit;
+      setFxSetting(p.id, +input.value); // aperçu en direct
+    });
+    input.addEventListener('change', () => renderFxSettings());
+  });
+  const reset = $('#fx-reset');
+  if (reset) {
+    reset.addEventListener('click', () => {
+      const all = { ...(STATE.keyboard.fx || {}) };
+      delete all[effect];
+      STATE.keyboard.fx = all;
+      window.satella.led.set('keyboard', { fx: all });
+      syncToolbars();
+      toast('Réglages de l\'effet remis par défaut.');
+    });
+  }
+}
+
 // Éditeur de la palette (vague de couleurs)
 function setPalette(list) {
   STATE.keyboard.palette = list;
@@ -751,9 +819,9 @@ function renderPaletteEditor() {
       ${pal.length > 2 ? `<button class="pal-del" data-i="${i}" title="Retirer cette couleur">×</button>` : ''}
     </span>`).join('')
     + (pal.length < 6 ? '<button class="btn small" id="pal-add" title="Ajouter une couleur">+</button>' : '')
-    + `<select id="pal-mode" title="Animation">
+    + (STATE.keyboard.effect === 'palette' ? `<select id="pal-mode" title="Animation">
         <option value="wave" ${STATE.keyboard.paletteMode !== 'breathe' ? 'selected' : ''}>Vague</option>
-        <option value="breathe" ${STATE.keyboard.paletteMode === 'breathe' ? 'selected' : ''}>Respiration</option></select>`
+        <option value="breathe" ${STATE.keyboard.paletteMode === 'breathe' ? 'selected' : ''}>Respiration</option></select>` : '')
     + `<select id="pal-preset" title="Palettes toutes prêtes"><option value="">Palette…</option>
         ${PALETTE_PRESETS.map(([name], i) => `<option value="${i}">${esc(name)}</option>`).join('')}</select>`;
   box.querySelectorAll('input[type="color"]').forEach((input) => {
@@ -774,11 +842,13 @@ function renderPaletteEditor() {
       renderPaletteEditor();
     });
   }
-  $('#pal-mode').addEventListener('change', (e) => {
-    STATE.keyboard.paletteMode = e.target.value;
-    window.satella.led.set('keyboard', { paletteMode: e.target.value });
-    syncToolbars();
-  });
+  if ($('#pal-mode')) {
+    $('#pal-mode').addEventListener('change', (e) => {
+      STATE.keyboard.paletteMode = e.target.value;
+      window.satella.led.set('keyboard', { paletteMode: e.target.value });
+      syncToolbars();
+    });
+  }
   $('#pal-preset').addEventListener('change', (e) => {
     if (e.target.value === '') return;
     setPalette([...PALETTE_PRESETS[+e.target.value][1]]);

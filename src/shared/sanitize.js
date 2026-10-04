@@ -2,6 +2,8 @@
 // partagé ne doit jamais pouvoir injecter autre chose que des réglages
 // valides (types, bornes, longueurs, listes fermées).
 
+const { sanitizeFx } = require('./effects');
+
 const FORMAT = 'satella';
 const FORMAT_VERSION = 1;
 
@@ -64,6 +66,7 @@ function deviceState(v, effects) {
   };
   if (effects === KB_EFFECTS) {
     out.overlay = colorMap(s.overlay);
+    out.fx = sanitizeFx(s.fx); // réglages personnalisés de chaque effet
     // Vague de couleurs : 2 à 6 couleurs valides
     const pal = (Array.isArray(s.palette) ? s.palette : []).map((c) => hex(c)).filter(Boolean).slice(0, 6);
     out.palette = pal.length >= 2 ? pal : [...DEFAULT_PALETTE];
