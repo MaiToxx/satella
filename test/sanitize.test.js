@@ -122,7 +122,7 @@ test('import : témoins, minuteur, sauvegardes et raccourcis de l’application 
     appShortcuts: { leds: 'Ctrl+Alt+L', timer: 'Ctrl+Alt+<script>', inconnue: 'F9' },
   }), {
     lockIndicators: true, lockColor: '#ffaa00', timerMinutes: 180, autoBackup: false,
-    appShortcuts: { leds: 'Ctrl+Alt+L', nextProfile: '', brightUp: '', brightDown: '', stopAll: '', timer: '' },
+    appShortcuts: { leds: 'Ctrl+Alt+L', nextProfile: '', brightUp: '', brightDown: '', stopAll: '', timer: '', palette: '' },
   });
   assert.deepEqual(settingsPatch({ lockColor: 'rouge', appShortcuts: null }), {});
 });
@@ -134,4 +134,14 @@ test('import : plage horaire des profils validée', () => {
   for (const bad of [{ from: '9h', to: '18:00' }, { from: '10:00', to: '10:00' }, 'toujours', null]) {
     assert.equal(parseImport(JSON.stringify(doc(bad)), KEYS).profile.schedule, null);
   }
+});
+
+test('export / import d’une macro seule', () => {
+  const { makeExport } = require('../src/shared/sanitize');
+  const file = makeExport('macro', { id: 'x', name: 'Ma macro', enabled: true, steps: [{ type: 'keyTap', key: 'f8' }, { type: 'evil' }] }, '1.10.0');
+  const res = parseImport(file, KEYS);
+  assert.equal(res.kind, 'macro');
+  assert.equal(res.macro.name, 'Ma macro');
+  assert.deepEqual(res.macro.steps.map((s) => s.type), ['keyTap']);
+  assert.throws(() => parseImport(JSON.stringify({ format: 'satella', version: 1, kind: 'macro', macro: 'x' }), KEYS), /macro invalide/);
 });

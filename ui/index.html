@@ -225,7 +225,10 @@
           <div class="eyebrow">Automatisation</div>
           <div class="head-row">
             <h1>Macros</h1>
-            <button id="macro-new" class="btn primary">Nouvelle macro</button>
+            <div class="btn-row">
+              <input type="search" id="macro-search" placeholder="Rechercher une macro…" autocomplete="off" spellcheck="false">
+              <button id="macro-new" class="btn primary">Nouvelle macro</button>
+            </div>
           </div>
         </div>
         <div class="macro-layout">
@@ -367,6 +370,18 @@
         <div class="panel">
           <div class="setting-row">
             <div>
+              <div class="setting-name">Apparence</div>
+              <div class="setting-desc">Thème de l'interface. Les aperçus du clavier et de la souris restent
+                sombres pour que les couleurs des LED ressortent.</div>
+            </div>
+            <select id="set-theme" title="Thème de l'interface">
+              <option value="dark">Sombre</option>
+              <option value="light">Clair</option>
+              <option value="system">Comme Windows</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div>
               <div class="setting-name">Lancer au démarrage de Windows</div>
               <div class="setting-desc">Satella démarre avec la session : les effets et les macros
                 sont actifs sans avoir à l'ouvrir.</div>
@@ -476,6 +491,7 @@
                 sur ce PC uniquement ; les frappes des macros et turbos ne comptent pas.</div>
               <div class="btn-row" style="margin-top:10px">
                 <span class="muted" id="set-stats-info" style="font-size:12.5px"></span>
+                <button class="btn small" id="set-stats-open">Voir les statistiques</button>
                 <button class="btn small" id="set-stats-reset">Remettre à zéro</button>
               </div>
             </div>

@@ -248,8 +248,14 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.fill('#profile-name', 'Jeu');
     await page.click('#profile-save');
     await sleep(200);
-    page.once('dialog', (d) => d.accept());
     await page.click('.profile-row.active .p-del');
+    await sleep(300);
+    check('suppression de profil annulable', (await page.textContent('#toast')).includes('supprimé')
+      && (await page.locator('#toast .toast-action').count()) === 1);
+    await page.click('#toast .toast-action');
+    await sleep(300);
+    check('suppression de profil annulée', (await page.locator('.profile-row[data-name="Jeu"]').count()) === 1);
+    await page.click('.profile-row[data-name="Jeu"] .p-del');
     await sleep(300);
     await page.click('.nav-btn[data-page="keyboard"]');
     await page.click('#kb-effects button[data-fx="fire"]');
@@ -314,6 +320,34 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await sleep(600);
     check('restauration', (await page.textContent('#toast')).includes('restaurée'));
 
+    // Macro seule : export, import (copie renommée), suppression annulable, recherche
+    await page.click('.nav-btn[data-page="macros"]');
+    await page.click('.macro-item >> nth=0');
+    const firstMacro = await page.inputValue('#me-name');
+    await page.click('#me-export');
+    await sleep(300);
+    check('export d’une macro', JSON.parse(fs.readFileSync(file, 'utf8')).kind === 'macro');
+    const macroCount = await page.locator('.macro-item').count();
+    await page.click('.nav-btn[data-page="profiles"]');
+    await page.click('#data-import');
+    await sleep(500);
+    check('import d’une macro', (await page.locator('.macro-item').count()) === macroCount + 1
+      && (await page.inputValue('#me-name')) === `${firstMacro} (2)`, await page.inputValue('#me-name'));
+    await page.click('#me-delete');
+    await sleep(300);
+    check('macro supprimée', (await page.locator('.macro-item').count()) === macroCount);
+    await page.click('#toast .toast-action');
+    await sleep(400);
+    check('suppression de macro annulée', (await page.locator('.macro-item').count()) === macroCount + 1
+      && (await page.inputValue('#me-name')) === `${firstMacro} (2)`);
+    await page.click('#me-delete');
+    await sleep(300);
+    await page.fill('#macro-search', 'zzz');
+    check('recherche de macro sans résultat', (await page.textContent('#macro-list')).includes('Aucune macro ne correspond'));
+    await page.fill('#macro-search', firstMacro.slice(0, 4));
+    check('recherche de macro', (await page.locator('.macro-item').count()) >= 1);
+    await page.fill('#macro-search', '');
+
     // ---- Palette de commandes (Ctrl+K) ----
     await page.keyboard.press('Control+k');
     await sleep(200);
@@ -338,6 +372,10 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('palette : aucun résultat', (await page.textContent('#palette-list')).includes('Aucun résultat'));
     await page.keyboard.press('Escape');
     check('palette fermée par Échap', !(await page.isVisible('#palette-backdrop')));
+    await page.evaluate(() => window.satella.runAction('palette'));
+    await sleep(300);
+    check('palette ouverte par la commande globale', await page.isVisible('#palette-input'));
+    await page.keyboard.press('Escape');
 
     // ---- Glisser-déposer : superposition, fichiers refusés ----
     const dropFile = async (name) => {
@@ -391,6 +429,22 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('mode nuit enregistré', st.nightMode && st.nightFrom === '22:15' && st.nightAction === 'dim'
       && !(await page.locator('#set-night-level').isDisabled()), JSON.stringify([st.nightMode, st.nightFrom, st.nightAction]));
     check('statistiques affichées', (await page.textContent('#set-stats-info')).length > 0);
+    await page.click('#set-stats-open');
+    await sleep(300);
+    check('statistiques détaillées', (await page.locator('#modal .stat-tile').count()) === 4
+      && (await page.locator('#modal svg.chart .hit').count()) === 30);
+    await page.click('#stats-close');
+    check('statistiques fermées', !(await page.isVisible('#modal-backdrop'))
+      && !(await page.evaluate(() => document.getElementById('modal').classList.contains('wide'))));
+
+    // Thème clair puis retour au sombre
+    await page.selectOption('#set-theme', 'light');
+    await sleep(200);
+    check('thème clair', (await page.evaluate(() => document.documentElement.dataset.theme)) === 'light'
+      && (await page.evaluate(() => window.satella.settings.get())).theme === 'light');
+    await page.selectOption('#set-theme', 'dark');
+    await sleep(200);
+    check('thème sombre', (await page.evaluate(() => document.documentElement.dataset.theme)) === 'dark');
 
     // Mode nuit « éteindre » sur la plage en cours : « rallumer » tient
     // jusqu'à la fin de la plage

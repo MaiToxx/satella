@@ -88,6 +88,9 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   écrans), **boucles imbriquées sur plusieurs niveaux**, exécution d'une autre
   macro (les appels en cycle sont refusés), **Ouvrir** un programme, un fichier
   ou un lien, **Attendre une touche** (avec délai maximum facultatif).
+- **Liste** : recherche par nom ou raccourci ; une macro s'exporte seule en
+  fichier `.satella` à partager ; une suppression s'annule depuis la
+  notification.
 - **Éditeur** : glisser-déposer des étapes (y compris dans une boucle),
   annuler/rétablir (Ctrl+Z / Ctrl+Y), Ctrl+S pour sauvegarder, double-clic pour
   modifier. « Tester » joue la version affichée, même non sauvegardée.
@@ -132,21 +135,25 @@ restauration. Des étapes « Ouvrir » (programmes, liens) dans un fichier reçu
 sont gardées qu'avec ton accord.
 
 ### Système
-- **Palette de commandes** (Ctrl+K) : recherche instantanée des pages, macros,
-  profils, effets et actions (LED, luminosité, minuteur, sauvegarde...).
+- **Palette de commandes** (Ctrl+K, ou un raccourci global qui affiche
+  Satella) : recherche instantanée des pages, macros, profils, effets et
+  actions (LED, luminosité, minuteur, sauvegarde...).
+- **Apparence** : thème sombre, clair ou comme Windows (les aperçus du
+  matériel restent sombres).
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
   extinction des LED, activation des macros et installation d'une mise à jour
   prête.
 - **Raccourcis de l'application** (Paramètres) : éteindre / rallumer les LED,
-  profil suivant, luminosité + / −, tout arrêter, minuteur ; actifs dans
+  profil suivant, luminosité + / −, tout arrêter, minuteur, palette ; actifs dans
   toutes les applications, même macros coupées. Les conflits avec une macro
   ou un turbo sont signalés.
 - **Sauvegardes automatiques** : chaque jour où quelque chose a changé,
   copie complète dans `satella-data/sauvegardes/` (10 dernières gardées),
   restaurable depuis les Paramètres.
-- **Statistiques de frappe** (option) : nombre d'appuis par touche, gardé sur
-  ce PC et remis à zéro en un clic ; les frappes des macros et turbos ne
-  comptent pas.
+- **Statistiques de frappe** (option) : nombre d'appuis par touche et par
+  jour, gardé sur ce PC et remis à zéro en un clic ; graphiques des 30
+  derniers jours et des touches les plus utilisées ; les frappes des macros
+  et turbos ne comptent pas.
 - **Optimiseur mémoire** (principe MemReduct), avec nettoyage automatique au
   plus toutes les 10 minutes, qui épargne l'application au premier plan.
 - **Dépannage** (page Paramètres) : rapport de diagnostic copiable, accès aux
@@ -216,6 +223,7 @@ src/system/idle.js            Inactivité (extinction automatique)
 src/system/schedule.js        Plages horaires (mode nuit, profils programmés)
 src/shared/textvars.js        Variables du texte tapé ({date}, {curseur}...)
 src/system/locks.js           État Verr. Maj / Verr. Num (témoins)
+src/system/keystats.js        Frappes par jour (statistiques)
 src/system/memory.js          Optimiseur mémoire
 src/system/logger.js          Journal fichier
 ui/                           Interface (HTML/CSS/JS)

@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('satella', {
   openData: () => ipcRenderer.invoke('app:openData'),
   pickFile: () => ipcRenderer.invoke('dialog:pickFile'),
   runAction: (name) => ipcRenderer.invoke('app:action', name),
+  onPaletteOpen: on('palette:open'),
   checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
   downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
@@ -132,6 +133,7 @@ contextBridge.exposeInMainWorld('satella', {
     load: (name) => ipcRenderer.invoke('profiles:load', name),
     rename: (oldName, newName) => ipcRenderer.invoke('profiles:rename', oldName, newName),
     remove: (name) => ipcRenderer.invoke('profiles:remove', name),
+    restore: (profile) => ipcRenderer.invoke('profiles:restore', profile),
     setMeta: (name, meta) => ipcRenderer.invoke('profiles:setMeta', name, meta),
     onAutoApplied: on('profiles:autoApplied'),
     onChanged: on('profiles:changed'),
@@ -140,6 +142,7 @@ contextBridge.exposeInMainWorld('satella', {
   data: {
     exportProfile: (name) => ipcRenderer.invoke('data:export', 'profile', name),
     exportAll: () => ipcRenderer.invoke('data:export', 'backup'),
+    exportMacro: (macro) => ipcRenderer.invoke('data:export', 'macro', macro),
     import: () => ipcRenderer.invoke('data:import'),
     // Fichier glissé-déposé : son chemin n'est connu que du pont
     importFile: (file) => ipcRenderer.invoke('data:importFile', webUtils.getPathForFile(file)),

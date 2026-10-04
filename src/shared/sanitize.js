@@ -232,11 +232,11 @@ const SETTING_TYPES = {
   flashOnMacro: 'boolean', keyStats: 'boolean', nightMode: 'boolean', nightFrom: 'string',
   nightTo: 'string', nightAction: 'string', nightLevel: 'number',
   lockIndicators: 'boolean', lockColor: 'string', timerMinutes: 'number', autoBackup: 'boolean',
-  appShortcuts: 'object',
+  appShortcuts: 'object', theme: 'string',
 };
 
 // Raccourcis globaux de l'application (action -> accélérateur)
-const APP_SHORTCUT_ACTIONS = ['leds', 'nextProfile', 'brightUp', 'brightDown', 'stopAll', 'timer'];
+const APP_SHORTCUT_ACTIONS = ['leds', 'nextProfile', 'brightUp', 'brightDown', 'stopAll', 'timer', 'palette'];
 function appShortcuts(v) {
   const out = {};
   if (!isObj(v)) return out;
@@ -256,6 +256,8 @@ function settingsPatch(v) {
     else if (k === 'lockColor') {
       const c = hex(v[k]);
       if (c) out[k] = c;
+    } else if (k === 'theme') {
+      if (['dark', 'light', 'system'].includes(v[k])) out[k] = v[k];
     } else if (k === 'appShortcuts') {
       if (isObj(v[k])) out[k] = appShortcuts(v[k]);
     }
@@ -286,6 +288,11 @@ function parseImport(text, keyNames) {
     if (!p) throw new Error('profil invalide');
     p.isDefault = false; // un import ne vole jamais le rôle de profil par défaut
     return { kind: 'profile', profile: p };
+  }
+  if (doc.kind === 'macro') {
+    const m = macro(doc.macro, keyNames);
+    if (!m) throw new Error('macro invalide');
+    return { kind: 'macro', macro: m };
   }
   if (doc.kind === 'backup') {
     const d = isObj(doc.data) ? doc.data : {};
@@ -319,6 +326,7 @@ function parseImport(text, keyNames) {
 function makeExport(kind, payload, appVersion) {
   const doc = { format: FORMAT, version: FORMAT_VERSION, kind, exportedAt: new Date().toISOString(), appVersion };
   if (kind === 'profile') doc.profile = payload;
+  else if (kind === 'macro') doc.macro = payload;
   else doc.data = payload;
   return JSON.stringify(doc, null, 2);
 }
