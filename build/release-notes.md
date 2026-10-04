@@ -1,8 +1,9 @@
 ## Nouveautés
-- Palette de commandes (Ctrl+K, ou « Rechercher » dans la barre latérale) : tape quelques lettres pour lancer une macro, charger un profil, changer d'effet, démarrer le minuteur, éteindre les LED ou aller à une page.
-- Variables dans le texte des macros et des abréviations : {date}, {heure}, {jour}, {mois}, {annee}, {presse-papiers} (le texte copié) et {curseur} pour placer le curseur où tu veux à la fin (par exemple `<b>{curseur}</b>`).
-- Profils programmés (page Profils) : un profil peut s'activer chaque jour sur une plage horaire (par exemple « Travail » de 9:00 à 18:00). Une application liée reste prioritaire.
-- Import par glisser-déposer : dépose un fichier .satella sur la fenêtre pour l'importer.
+- Thème clair (Paramètres > Apparence) : sombre, clair ou comme Windows. Les aperçus du clavier et de la souris restent sombres pour que les couleurs des LED ressortent.
+- Statistiques détaillées (Paramètres > Statistiques de frappe > « Voir les statistiques ») : frappes par jour sur les 30 derniers jours, touches les plus utilisées, moyenne et record.
+- Macros : recherche dans la liste, export d'une macro seule en fichier .satella à partager (et import, y compris par glisser-déposer).
+- « Annuler » après la suppression d'une macro ou d'un profil, au lieu d'une confirmation.
+- Nouveau raccourci de l'application : afficher Satella et ouvrir la palette de commandes depuis n'importe quelle application.
 
 ## Corrections
-- Recharger le profil actif juste après une retouche ne l'annule plus à l'écran.
+- Le bouton « Rechercher » de la barre latérale n'est plus rogné.

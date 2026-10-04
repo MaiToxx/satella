@@ -70,12 +70,24 @@ const SWATCH_COLORS = [
   '#7047ff', '#ff00d4', '#ffffff', '#00ffd0', '#ff4d5e',
 ];
 
-function toast(msg, ms = 2500) {
+// `action` : bouton facultatif dans la notification ({ label, run }),
+// par exemple « Annuler » après une suppression
+function toast(msg, ms = 2500, action = null) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.replaceChildren(document.createTextNode(msg));
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.addEventListener('click', () => {
+      t.hidden = true;
+      action.run();
+    }, { once: true });
+    t.appendChild(b);
+  }
   t.hidden = false;
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.hidden = true; }, ms);
+  t._timer = setTimeout(() => { t.hidden = true; }, action ? Math.max(ms, 6000) : ms);
 }
 
 // Échappement HTML de tout texte saisi ou importé avant insertion dans
@@ -87,6 +99,8 @@ function esc(v) {
 }
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// Texte comparable sans accents ni majuscules (recherches)
+const fold = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 function rgbCss(rgb) { return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`; }
 function uid() { return 'm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function fmtDate(iso) {
@@ -140,12 +154,28 @@ function setAccent() {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
   if (!m) return;
   const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // Thème clair : une LED très claire (blanc, jaune) donnerait un accent
+  // illisible sur fond blanc ; il est assombri pour l'interface
+  if (document.documentElement.dataset.theme === 'light' && lum > 150) {
+    const f = 150 / lum;
+    [r, g, b] = [r, g, b].map((v) => Math.round(v * f));
+    lum = 150;
+  }
   const root = document.documentElement.style;
-  root.setProperty('--accent', hex);
-  root.setProperty('--accent-text', lum > 150 ? '#0a0b0e' : '#ffffff');
+  root.setProperty('--accent', `rgb(${r}, ${g}, ${b})`);
+  root.setProperty('--accent-text', lum > 140 ? '#0a0b0e' : '#ffffff');
 }
+
+// Thème de l'interface : sombre, clair, ou celui de Windows
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const t = SETTINGS.theme || 'dark';
+  document.documentElement.dataset.theme = t === 'system' ? (darkQuery.matches ? 'dark' : 'light') : t;
+  setAccent();
+}
+darkQuery.addEventListener('change', () => { if (SETTINGS.theme === 'system') applyTheme(); });
 
 /* Petite fenêtre de saisie (Electron ne gère pas window.prompt) */
 function askText({ title, label, value = '', ok = 'Valider' }) {
@@ -1042,7 +1072,17 @@ function renderMacroList() {
     list.innerHTML = '<p class="muted">Aucune macro. Crée ta première macro !</p>';
     return;
   }
-  for (const m of MACROS) {
+  // Recherche : nom ou raccourci, sans tenir compte des accents
+  const words = fold($('#macro-search').value).split(/\s+/).filter(Boolean);
+  const shown = MACROS.filter((m) => {
+    const text = fold(`${m.name} ${(m.trigger && m.trigger.accelerator) || ''}`);
+    return words.every((w) => text.includes(w));
+  });
+  if (!shown.length) {
+    list.innerHTML = '<p class="muted">Aucune macro ne correspond à la recherche.</p>';
+    return;
+  }
+  for (const m of shown) {
     const el = document.createElement('div');
     const err = shortcutError('macro', m.id);
     el.className = 'macro-item' + (m.id === currentMacroId ? ' active' : '') + (m.enabled ? '' : ' disabled');
@@ -1174,6 +1214,7 @@ function renderMacroEditor() {
       <button class="btn" id="me-play" title="Joue la version affichée, même non sauvegardée">${svg('play')} Tester</button>
       <button class="btn" id="me-stop">${svg('stop')} Stop</button>
       <button class="btn ${recording ? 'danger' : ''}" id="me-record">${svg(recording ? 'stop' : 'record')} ${recording ? 'Arrêter l’enregistrement' : 'Enregistrer les entrées'}</button>
+      <button class="btn" id="me-export" title="Fichier .satella à partager">${svg('save')} Exporter</button>
       <button class="btn danger" id="me-delete">${svg('trash')} Supprimer</button>
     </div>
     <div class="btn-row rec-opts" style="margin-bottom:6px">
@@ -1230,14 +1271,30 @@ function renderMacroEditor() {
   $('#me-save').addEventListener('click', saveCurrentMacro);
   $('#me-play').addEventListener('click', () => playMacro(m, true));
   $('#me-stop').addEventListener('click', () => window.satella.macros.stop(m.id));
+  $('#me-export').addEventListener('click', async () => {
+    const res = await window.satella.data.exportMacro(clone(m));
+    if (res.ok) toast('Macro exportée : ' + res.file, 4000);
+    else if (!res.canceled) toast('Export impossible : ' + res.error, 4000);
+  });
   $('#me-delete').addEventListener('click', async () => {
-    if (!confirm(`Supprimer la macro « ${m.name} » ?`)) return;
+    // Version à restaurer : la dernière sauvegardée, sinon celle affichée
+    const backup = SAVED.has(m.id) ? JSON.parse(SAVED.get(m.id)) : clone(m);
     const drafts = MACROS.filter((x) => x.id !== m.id && isUnsaved(x));
     const saved = await window.satella.macros.remove(m.id);
     mergeSavedMacros(saved, drafts);
     currentMacroId = null;
     renderMacroList();
     renderMacroEditor();
+    toast(`Macro « ${m.name} » supprimée.`, 6000, {
+      label: 'Annuler',
+      run: async () => {
+        const others = MACROS.filter(isUnsaved);
+        mergeSavedMacros(await window.satella.macros.save(backup), others);
+        currentMacroId = backup.id;
+        renderMacroList();
+        renderMacroEditor();
+      },
+    });
   });
   $('#me-record').addEventListener('click', toggleRecording);
   $('#rec-mouse').addEventListener('change', (e) => { recordOpts.mouse = e.target.checked; });
@@ -1845,6 +1902,7 @@ function newMacro() {
   renderMacroEditor();
 }
 $('#macro-new').addEventListener('click', newMacro);
+$('#macro-search').addEventListener('input', () => renderMacroList());
 
 // Nouvelle liste de macros venue du processus principal (profil chargé)
 function replaceMacros(list, reason) {
@@ -2061,8 +2119,14 @@ async function renderProfiles(payload) {
   }));
   $$('.p-del').forEach((b) => b.addEventListener('click', async (e) => {
     const name = rowName(e);
-    if (!confirm(`Supprimer le profil « ${name} » ?`)) return;
+    const backup = profiles.find((x) => x.name === name);
     renderProfiles(await window.satella.profiles.remove(name));
+    if (backup) {
+      toast(`Profil « ${name} » supprimé.`, 6000, {
+        label: 'Annuler',
+        run: async () => renderProfiles(await window.satella.profiles.restore(backup)),
+      });
+    }
   }));
 }
 
@@ -2111,6 +2175,15 @@ $('#data-import').addEventListener('click', async () => {
 function onImported(res) {
   if (!res.ok) {
     if (!res.canceled) toast('Import impossible : ' + res.error, 5000);
+    return;
+  }
+  if (res.kind === 'macro') {
+    mergeSavedMacros(res.macros, MACROS.filter(isUnsaved));
+    currentMacroId = res.id;
+    showPage('macros');
+    renderMacroList();
+    renderMacroEditor();
+    toast(`Macro « ${res.name} » importée.`);
     return;
   }
   if (res.kind === 'profile') {
@@ -2325,6 +2398,8 @@ $('#mem-threshold').addEventListener('change', (e) => {
 /* ================= Paramètres ================= */
 function renderSettings(s) {
   SETTINGS = s;
+  $('#set-theme').value = ['light', 'system'].includes(s.theme) ? s.theme : 'dark';
+  applyTheme();
   $('#set-leds').checked = s.ledsEnabled;
   $('#set-macros').checked = s.macrosEnabled;
   $('#set-startup').checked = s.launchAtStartup;
@@ -2453,11 +2528,149 @@ async function refreshStatsInfo() {
   const since = st.since ? ` depuis le ${new Date(st.since).toLocaleDateString('fr-FR')}` : '';
   info.textContent = `${st.total.toLocaleString('fr-FR')} frappes comptées${since}. Les plus utilisées : ${top}.`;
 }
+/* ---- Statistiques détaillées (fenêtre) ---- */
+const nf = new Intl.NumberFormat('fr-FR');
+const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Graduation « propre » au-dessus du maximum (1, 2, 5 x 10^n)
+function niceCeil(v) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 5, 10].map((m) => m * p).find((x) => x >= v);
+}
+
+// Couleur des barres : l'accent (couleur des LED), sauf s'il se confond
+// avec le fond sombre
+function chartColor() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const n = (v.match(/\d+/g) || []).map(Number);
+  const hex = /^#([0-9a-f]{6})$/i.exec(v);
+  const [r, g, b] = hex ? [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16)) : n;
+  const lum = 0.2126 * (r || 0) + 0.7152 * (g || 0) + 0.0722 * (b || 0);
+  return document.documentElement.dataset.theme !== 'light' && lum < 70 ? 'var(--muted)' : (v || 'var(--muted)');
+}
+
+// Colonnes : arrondi de 4 px côté valeur, carré sur la ligne de base
+function columnPath(x, y, w, h) {
+  const r = Math.min(4, h, w / 2);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function statsDaysSvg(series) {
+  const W = 660, H = 190, L = 46, R = 8, T = 20, B = 24;
+  const pw = W - L - R, ph = H - T - B;
+  const max = Math.max(0, ...series.map((d) => d.n));
+  const top = niceCeil(max);
+  const band = pw / series.length;
+  const bw = Math.min(24, band - 2);
+  const y = (v) => T + ph - (v / top) * ph;
+  const recordIdx = max > 0 ? series.findIndex((d) => d.n === max) : -1;
+  let out = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Frappes par jour sur les 30 derniers jours">`;
+  for (const t of [0, top / 2, top]) {
+    out += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/>`
+      + `<text class="tick" x="${L - 6}" y="${y(t) + 3.5}" text-anchor="end">${nf.format(t)}</text>`;
+  }
+  series.forEach((d, i) => {
+    const x = L + i * band + (band - bw) / 2;
+    if (d.n > 0) out += `<path class="col" d="${columnPath(x, y(d.n), bw, T + ph - y(d.n))}"/>`;
+    if (i === recordIdx) out += `<text class="val" x="${x + bw / 2}" y="${y(d.n) - 5}" text-anchor="middle">${nf.format(d.n)}</text>`;
+    if (i % 7 === 2 || i === series.length - 1) {
+      out += `<text class="tick" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${esc(i === series.length - 1 ? 'auj.' : d.short)}</text>`;
+    }
+    out += `<rect class="hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}" tabindex="0"
+      data-tip="${esc(`${nf.format(d.n)} frappe${d.n > 1 ? 's' : ''}|${d.long}`)}"/>`;
+  });
+  return out + '</svg>';
+}
+
+async function openStatsModal() {
+  const st = await window.satella.stats.get();
+  const days = (st && st.days) || {};
+  const today = new Date();
+  const series = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    series.push({
+      n: days[dayKey(d)] || 0,
+      short: d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }),
+      long: d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }),
+    });
+  }
+  const active = series.filter((d) => d.n > 0);
+  const best = active.reduce((a, d) => (d.n > (a ? a.n : 0) ? d : a), null);
+  const tiles = [
+    ['Frappes comptées', nf.format(st.total || 0)],
+    ["Aujourd'hui", nf.format(series[29].n)],
+    ['Moyenne par jour actif', nf.format(active.length ? Math.round(active.reduce((s, d) => s + d.n, 0) / active.length) : 0)],
+    ['Record (30 jours)', best ? `${nf.format(best.n)}` : '—', best ? best.short : ''],
+  ];
+  const top = Object.entries(st.counts || {}).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const topMax = top.length ? top[0][1] : 1;
+  const modal = $('#modal');
+  modal.classList.add('wide');
+  modal.innerHTML = `
+    <h3>Statistiques de frappe</h3>
+    <p class="muted stats-sub">${st.since ? `Depuis le ${esc(new Date(st.since).toLocaleDateString('fr-FR'))}. ` : ''}Seul le nombre d'appuis par touche est compté, sur ce PC.</p>
+    <div class="stat-tiles">${tiles.map(([label, value, sub]) => `
+      <div class="stat-tile"><div class="st-label">${esc(label)}</div><div class="st-value">${esc(value)}</div>${sub ? `<div class="st-sub">${esc(sub)}</div>` : ''}</div>`).join('')}
+    </div>
+    <h4 class="stats-h">Frappes par jour, 30 derniers jours</h4>
+    <div class="chart-wrap" style="--chart:${chartColor()}">${statsDaysSvg(series)}<div class="chart-tip" hidden></div></div>
+    <details class="stats-table"><summary>Voir le tableau</summary>
+      <table><thead><tr><th>Jour</th><th>Frappes</th></tr></thead><tbody>
+        ${series.slice().reverse().map((d) => `<tr><td>${esc(d.long)}</td><td>${nf.format(d.n)}</td></tr>`).join('')}
+      </tbody></table>
+    </details>
+    <h4 class="stats-h">Touches les plus utilisées</h4>
+    <div class="hbars" style="--chart:${chartColor()}">${top.length ? top.map(([k, n]) => `
+      <div class="hb-row"><span class="hb-label">${esc(keyLabel(k))}</span>
+        <span class="hb-track"><i style="width:calc((100% - 64px) * ${Math.max(0.01, n / topMax).toFixed(3)})"></i><b>${nf.format(n)}</b></span></div>`).join('')
+      : '<p class="muted">Aucune frappe comptée pour l\'instant.</p>'}
+    </div>
+    <div class="btn-row" style="margin-top:16px"><button class="btn" id="stats-close">Fermer</button></div>`;
+  const backdrop = $('#modal-backdrop');
+  const cleanup = () => { modal.classList.remove('wide'); backdrop.hidden = true; };
+  $('#stats-close').addEventListener('click', cleanup);
+  backdrop.addEventListener('modal-dismiss', () => modal.classList.remove('wide'), { once: true });
+
+  // Bulle d'aide : jour et valeur de la colonne survolée (ou sélectionnée au clavier)
+  const wrap = modal.querySelector('.chart-wrap');
+  const tip = wrap.querySelector('.chart-tip');
+  const show = (el) => {
+    const [value, label] = el.dataset.tip.split('|');
+    tip.replaceChildren();
+    const strong = document.createElement('strong');
+    strong.textContent = value;
+    const span = document.createElement('span');
+    span.textContent = label;
+    tip.append(strong, span);
+    const box = el.getBoundingClientRect();
+    const host = wrap.getBoundingClientRect();
+    tip.hidden = false;
+    tip.style.left = `${Math.min(host.width - tip.offsetWidth, Math.max(0, box.left - host.left + box.width / 2 - tip.offsetWidth / 2))}px`;
+    $$('.chart .hit.on').forEach((h) => h.classList.remove('on'));
+    el.classList.add('on');
+  };
+  const hide = () => { tip.hidden = true; $$('.chart .hit.on').forEach((h) => h.classList.remove('on')); };
+  wrap.querySelectorAll('.hit').forEach((el) => {
+    el.addEventListener('pointerenter', () => show(el));
+    el.addEventListener('focus', () => show(el));
+    el.addEventListener('blur', hide);
+  });
+  wrap.addEventListener('pointerleave', hide);
+  backdrop.hidden = false;
+}
+$('#set-stats-open').addEventListener('click', openStatsModal);
+
 $('#set-stats-reset').addEventListener('click', async () => {
   if (!confirm('Remettre à zéro les statistiques de frappe ?')) return;
   await window.satella.stats.reset();
   refreshStatsInfo();
   toast('Statistiques remises à zéro.');
+});
+
+$('#set-theme').addEventListener('change', async (e) => {
+  renderSettings(await window.satella.settings.set({ theme: e.target.value }));
 });
 
 // Témoins Verr. Maj / Verr. Num : couleur
@@ -2473,6 +2686,7 @@ const APP_SHORTCUTS = [
   ['brightDown', 'Luminosité −'],
   ['stopAll', 'Arrêter toutes les macros et turbos'],
   ['timer', 'Démarrer / arrêter le minuteur'],
+  ['palette', 'Afficher Satella et ouvrir la palette de commandes'],
 ];
 
 function renderAppShortcuts() {
@@ -2586,7 +2800,6 @@ async function refreshFootprint() {
 }
 
 /* ================= Palette de commandes (Ctrl+K) ================= */
-const fold = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 let paletteAll = [];
 let paletteItems = [];
 let paletteSel = 0;
@@ -2776,6 +2989,7 @@ async function init() {
     syncToolbars();
   });
   window.satella.timer.onState(onTimerState);
+  window.satella.onPaletteOpen(() => openPalette());
   window.satella.devices.onDirectStatus(renderDirectPanel);
   window.satella.macros.onRecordEvent((step) => {
     if (!recording) return;

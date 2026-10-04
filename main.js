@@ -4,7 +4,7 @@
 
 const {
   app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, nativeImage,
-  powerMonitor, dialog, shell, clipboard, screen, session, desktopCapturer, Notification,
+  powerMonitor, dialog, shell, clipboard, screen, session, desktopCapturer, Notification, nativeTheme,
 } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
@@ -26,6 +26,7 @@ const memory = require('./src/system/memory');
 const foreground = require('./src/system/foreground');
 const idle = require('./src/system/idle');
 const locks = require('./src/system/locks');
+const { countKeyDay } = require('./src/system/keystats');
 const { MacroEngine, hookAvailable } = require('./src/macros/engine');
 const { SnippetEngine } = require('./src/macros/snippets');
 const input = require('./src/macros/input');
@@ -69,7 +70,7 @@ let lockTimer = null;           // témoins Verr. Maj / Verr. Num
 let liveLayers = false;         // calques temporaires affichés (flux temps réel)
 let timer = null;               // minuteur { t0, ms, minutes, done, endTimer, clearTimer }
 let backupTimer = null;
-let keyStats = { counts: {}, total: 0, since: null };
+let keyStats = { counts: {}, total: 0, since: null, days: {} };
 let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
@@ -122,6 +123,7 @@ const DEFAULT_SETTINGS = {
   timerMinutes: 25,         // durée du minuteur (dernière utilisée)
   autoBackup: true,         // sauvegarde automatique quotidienne des données
   appShortcuts: {},         // raccourcis globaux de l'application : action -> accélérateur
+  theme: 'dark',            // 'dark' | 'light' | 'system' (comme Windows)
 };
 
 // Démarrage silencieux : Windows relance Satella avec ce drapeau
@@ -156,7 +158,7 @@ function createWindow() {
     y: b.y,
     minWidth: 1080,
     minHeight: 680,
-    backgroundColor: '#0b0e14',
+    backgroundColor: (nativeTheme.shouldUseDarkColors ? '#0a0b0e' : '#eceef2'),
     autoHideMenuBar: true,
     title: 'Satella',
     show: false,
@@ -288,7 +290,8 @@ function setupEngines() {
 
   // Statistiques de frappe (comptage par touche uniquement, jamais la suite
   // des touches tapées)
-  keyStats = { counts: {}, total: 0, since: null, ...store.read('key-stats', {}) };
+  keyStats = { counts: {}, total: 0, since: null, days: {}, ...store.read('key-stats', {}) };
+  if (!keyStats.days || typeof keyStats.days !== 'object') keyStats.days = {};
   ledEngine.setHeatmap(keyStats.counts);
 
   // Macros sauvegardées (déclencheurs enregistrés par applySettings)
@@ -362,6 +365,7 @@ function setupEngines() {
       keyStats.counts[key] = (keyStats.counts[key] || 0) + 1;
       keyStats.total++;
       if (!keyStats.since) keyStats.since = new Date().toISOString();
+      countKeyDay(keyStats.days);
       store.writeLater('key-stats', keyStats, 5000);
     }
     // Expansion de texte : uniquement la frappe naturelle de l'utilisateur
@@ -406,6 +410,9 @@ const streamingKeyboard = () => settings.ledsEnabled && !isDimmed() && !!direct.
 
 // Active ou coupe les modules selon les paramètres, à chaud.
 function applySettings() {
+  // --- Apparence : thème de l'interface et de la barre de titre ---
+  nativeTheme.themeSource = ['light', 'dark', 'system'].includes(settings.theme) ? settings.theme : 'dark';
+
   // --- Éclairage ---
   if (settings.ledsEnabled) {
     ledEngine.start();
@@ -568,6 +575,8 @@ const APP_ACTIONS = {
   brightDown: { label: 'luminosité −', run: () => stepBrightness(-1) },
   stopAll: { label: 'tout arrêter', run: () => { macroEngine.stop(); stopAllTurbos(); } },
   timer: { label: 'minuteur', run: () => (timer ? stopTimer() : startTimer(settings.timerMinutes)) },
+  // Depuis n'importe quelle application : Satella s'affiche, palette ouverte
+  palette: { label: 'palette de commandes', run: () => { revealWindow(); send('palette:open'); } },
 };
 
 function registerAppShortcuts() {
@@ -1206,19 +1215,25 @@ function safeFileName(name) {
   return String(name).replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'profil';
 }
 
-async function exportData(kind, name) {
+// `kind` : 'profile' (nom), 'macro' (macro affichée, éventuellement non
+// sauvegardée) ou 'backup'
+async function exportData(kind, arg) {
   let payload;
   let defaultName;
   if (kind === 'profile') {
-    payload = store.read('profiles', []).find((p) => p.name === name);
+    payload = store.read('profiles', []).find((p) => p.name === arg);
     if (!payload) return { ok: false, error: 'profil introuvable' };
-    defaultName = `${safeFileName(name)}.satella`;
+    defaultName = `${safeFileName(arg)}.satella`;
+  } else if (kind === 'macro') {
+    payload = sanitize.macro(arg, KEY_NAMES);
+    if (!payload) return { ok: false, error: 'macro invalide' };
+    defaultName = `${safeFileName(payload.name || 'macro')}.satella`;
   } else {
     payload = backupData();
     defaultName = `Satella-sauvegarde-${new Date().toISOString().slice(0, 10)}.satella`;
   }
   const res = await dialog.showSaveDialog(win, {
-    title: kind === 'profile' ? 'Exporter le profil' : 'Sauvegarder toutes les données',
+    title: { profile: 'Exporter le profil', macro: 'Exporter la macro' }[kind] || 'Sauvegarder toutes les données',
     defaultPath: path.join(app.getPath('documents'), defaultName),
     filters: [{ name: 'Fichier Satella', extensions: ['satella'] }],
   });
@@ -1275,9 +1290,9 @@ async function importData({ file = null, trusted = false } = {}) {
 
   // Étapes « Ouvrir » (programmes, liens) : jamais importées sans accord
   // (sauf depuis les sauvegardes automatiques de Satella elle-même)
-  const imported = parsed.kind === 'profile'
-    ? [parsed.profile]
-    : [{ macros: parsed.data.macros }, ...parsed.data.profiles];
+  const imported = parsed.kind === 'profile' ? [parsed.profile]
+    : parsed.kind === 'macro' ? [{ macros: [parsed.macro] }]
+      : [{ macros: parsed.data.macros }, ...parsed.data.profiles];
   const targets = trusted ? [] : [...new Set(imported.flatMap((x) => sanitize.openTargets(x.macros)))];
   if (targets.length) {
     const ans = await dialog.showMessageBox(win, {
@@ -1294,7 +1309,29 @@ async function importData({ file = null, trusted = false } = {}) {
     if (ans.response === 0) {
       for (const x of imported) x.macros = sanitize.stripOpenSteps(x.macros);
       if (parsed.kind === 'backup') parsed.data.macros = imported[0].macros;
+      if (parsed.kind === 'macro') parsed.macro = imported[0].macros[0];
     }
+  }
+
+  // Macro seule : ajoutée aux macros actuelles, sous un identifiant neuf ;
+  // son raccourci est retiré s'il est déjà pris par une autre macro
+  if (parsed.kind === 'macro') {
+    const m = parsed.macro;
+    m.id = `m_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const names = new Set(macros.map((x) => x.name));
+    if (names.has(m.name)) {
+      let i = 2;
+      while (names.has(`${m.name} (${i})`)) i++;
+      m.name = `${m.name} (${i})`;
+    }
+    if (m.trigger && macros.some((x) => x.trigger && normAccel(x.trigger.accelerator) === normAccel(m.trigger.accelerator))) {
+      m.trigger = null;
+    }
+    macros.push(m);
+    store.write('macros', macros);
+    refreshShortcuts();
+    profileChanged();
+    return { ok: true, kind: 'macro', id: m.id, name: m.name, macros };
   }
 
   if (parsed.kind === 'profile') {
@@ -1592,7 +1629,7 @@ function setupIpc() {
   // ---- Statistiques de frappe ----
   ipcMain.handle('stats:get', () => keyStats);
   ipcMain.handle('stats:reset', () => {
-    keyStats = { counts: {}, total: 0, since: settings.keyStats ? new Date().toISOString() : null };
+    keyStats = { counts: {}, total: 0, since: settings.keyStats ? new Date().toISOString() : null, days: {} };
     ledEngine.setHeatmap(keyStats.counts);
     store.write('key-stats', keyStats);
     ledEngine.renderOnce();
@@ -1707,6 +1744,19 @@ function setupIpc() {
     lastAutoTarget = null;
     return profilesPayload();
   });
+  // Annulation d'une suppression : le profil revient (validé comme un import)
+  ipcMain.handle('profiles:restore', (e, raw) => {
+    const p = sanitize.profile(raw, KEY_NAMES);
+    if (!p) return profilesPayload();
+    const profiles = store.read('profiles', []);
+    p.name = uniqueProfileName(profiles, p.name);
+    if (p.isDefault && profiles.some((x) => x.isDefault)) p.isDefault = false;
+    profiles.push(p);
+    store.write('profiles', profiles);
+    lastAutoTarget = null;
+    rebuildTrayMenu();
+    return profilesPayload();
+  });
   ipcMain.handle('profiles:remove', (e, name) => {
     const profiles = store.read('profiles', []).filter((p) => p.name !== name);
     store.write('profiles', profiles);
@@ -1721,7 +1771,7 @@ function setupIpc() {
   });
 
   // ---- Import / export ----
-  ipcMain.handle('data:export', (e, kind, name) => exportData(kind === 'profile' ? 'profile' : 'backup', name));
+  ipcMain.handle('data:export', (e, kind, arg) => exportData(['profile', 'macro'].includes(kind) ? kind : 'backup', arg));
   ipcMain.handle('data:import', () => importData());
   // Fichier glissé-déposé sur la fenêtre
   ipcMain.handle('data:importFile', (e, file) => {
