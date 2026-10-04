@@ -4,6 +4,7 @@
 
 const { EventEmitter } = require('events');
 const layout = require('../shared/layout');
+const { fxSettings } = require('../shared/effects');
 
 const FPS = 30;
 
@@ -58,6 +59,22 @@ function firePalette(v) {
   ];
 }
 
+// Palette en boucle (fondu entre couleurs voisines) : t réel, période 1
+function samplePalette(pal, t) {
+  const n = pal.length;
+  const p = (((t % 1) + 1) % 1) * n;
+  const i = Math.floor(p) % n;
+  const f = p - Math.floor(p);
+  return lerpRgb(pal[i], pal[(i + 1) % n], f * f * (3 - 2 * f));
+}
+
+// Palette parcourue une seule fois, de la première à la dernière couleur
+function paletteLinear(pal, t) {
+  const p = clamp01(t) * (pal.length - 1);
+  const i = Math.min(pal.length - 2, Math.floor(p));
+  return lerpRgb(pal[i], pal[i + 1], p - i);
+}
+
 // Hachage stable pour l'effet disco
 function hashKey(id, seed) {
   let h = seed * 374761393;
@@ -90,6 +107,7 @@ const DEFAULT_DEVICE_STATE = () => ({
   colors: {},              // couleurs personnalisées par touche/zone (mode static)
   overlay: {},             // calque : touches fixes par-dessus n'importe quel effet
   palette: [...DEFAULT_PALETTE], // vague de couleurs : 2 à 6 couleurs
+  fx: {},                  // réglages personnalisés de chaque effet (src/shared/effects.js)
   paletteMode: 'wave',     // 'wave' (défilement) | 'breathe' (tout le clavier en fondu)
 });
 
@@ -109,7 +127,10 @@ class LedEngine extends EventEmitter {
     this.t = 0;
     this.timer = null;
     this.reactiveKeys = new Map(); // keyId -> intensité 0..1
+    this.reactiveColors = new Map(); // keyId -> couleur de la frappe (arc-en-ciel, palette)
     this.sparkles = new Map();
+    this.sparkleColors = new Map();
+    this._paletteStep = 0;         // couleur suivante de la palette (événements)
     this.ripples = [];             // ondes de choc {x, y, t0}
     this.drops = [];               // gouttes de pluie {x, t0, v}
     this.stats = { cpu: 0, ram: 0 };                // jauge système (0..1)
@@ -245,15 +266,47 @@ class LedEngine extends EventEmitter {
     this.renderOnce();
   }
 
+  paletteRgb(st) {
+    return (Array.isArray(st.palette) && st.palette.length >= 2 ? st.palette : DEFAULT_PALETTE).map(hexToRgb);
+  }
+
+  // Couleur d'un événement (frappe, étincelle, goutte, onde) selon la source
+  // choisie : null = couleur principale, lue au moment du dessin
+  eventColor(mode, pal) {
+    if (mode === 'rainbow') return hsvToRgb(Math.random() * 360, 1, 1);
+    if (mode === 'palette') {
+      this._paletteStep = (this._paletteStep + 1) % pal.length;
+      return pal[this._paletteStep];
+    }
+    return null;
+  }
+
   // Appelé par l'écoute clavier globale (effets réactif et onde de choc)
   keyActivity(keyId) {
+    const st = this.state.keyboard;
+    const fx = fxSettings(st, st.effect);
+    const color = this.eventColor(fx.colors, this.paletteRgb(st));
     this.reactiveKeys.set(keyId, 1);
-    if (this.state.keyboard.effect === 'ripple') {
-      const k = this.keyIndex.get(keyId);
-      if (k) {
-        this.ripples.push({ x: k.x + k.w / 2, y: k.y + k.h / 2, t0: this.t });
-        if (this.ripples.length > 12) this.ripples.shift();
+    this.reactiveColors.set(keyId, color);
+    const k0 = this.keyIndex.get(keyId);
+    if (!k0) return;
+    const cx = k0.x + k0.w / 2, cy = k0.y + k0.h / 2;
+    // Réactif avec rayon : les touches voisines s'allument aussi, moins fort
+    if (st.effect === 'reactive' && fx.spread > 0) {
+      for (const k of layout.keyboard) {
+        if (k.id === keyId) continue;
+        const d = Math.hypot(k.x + k.w / 2 - cx, k.y + k.h / 2 - cy);
+        if (d > fx.spread + 0.5) continue;
+        const g = Math.max(0, 1 - d / (fx.spread + 1.5));
+        if (g > (this.reactiveKeys.get(k.id) || 0)) {
+          this.reactiveKeys.set(k.id, g);
+          this.reactiveColors.set(k.id, color);
+        }
       }
+    }
+    if (st.effect === 'ripple') {
+      this.ripples.push({ x: cx, y: cy, t0: this.t, color });
+      if (this.ripples.length > 12) this.ripples.shift();
     }
   }
 
@@ -305,7 +358,8 @@ class LedEngine extends EventEmitter {
     const speed = 0.2 + (st.speed / 100) * 2.3;
     const base = hexToRgb(st.baseColor);
     const color2 = hexToRgb(st.color2 || '#ff00d4');
-    const pal = (Array.isArray(st.palette) && st.palette.length >= 2 ? st.palette : DEFAULT_PALETTE).map(hexToRgb);
+    const pal = this.paletteRgb(st);
+    const fx = fxSettings(st, st.effect); // réglages personnalisés de l'effet
     const out = {};
 
     // Temps réel écoulé depuis le dernier calcul : les décroissances ne
@@ -341,10 +395,21 @@ class LedEngine extends EventEmitter {
     }
 
     // Apparition des gouttes (effet pluie)
-    if (st.effect === 'rain' && Math.random() < 0.05 * (0.5 + speed * 1.5)) {
-      this.drops.push({ x: Math.random() * layout.bounds.w, t0: this.t, v: 2.5 + speed * 3 });
-      if (this.drops.length > 24) this.drops.shift();
+    if (st.effect === 'rain' && Math.random() < 0.05 * (0.5 + speed * 1.5) * (fx.density / 100)) {
+      this.drops.push({ x: Math.random() * layout.bounds.w, t0: this.t, v: 2.5 + speed * 3, color: this.eventColor(fx.colors, pal) });
+      if (this.drops.length > 48) this.drops.shift();
     }
+
+    // Position d'une touche dans la direction choisie (0 -> 1)
+    const dirPos = (key) => {
+      switch (st.direction) {
+        case 'rl': return 1 - key.x / layout.bounds.w;
+        case 'tb': return key.y / layout.bounds.h;
+        case 'bt': return 1 - key.y / layout.bounds.h;
+        default: return key.x / layout.bounds.w;
+      }
+    };
+    const wave01 = (v) => (Math.sin(v * 2 * Math.PI) + 1) / 2;
 
     for (const key of layout.keyboard) {
       let rgb = [0, 0, 0];
@@ -354,86 +419,123 @@ class LedEngine extends EventEmitter {
           rgb = st.colors[key.id] ? hexToRgb(st.colors[key.id]) : base;
           break;
         case 'breathing': {
-          const f = (Math.sin(this.t * speed * 2 * Math.PI * 0.35) + 1) / 2;
-          rgb = scale(st.colors[key.id] ? hexToRgb(st.colors[key.id]) : base, 0.08 + 0.92 * f);
+          const u = this.t * speed * 0.35;
+          const d = fx.depth / 100;
+          const level = 1 - d + d * wave01(u);
+          let c;
+          if (fx.colors === 'base') c = st.colors[key.id] ? hexToRgb(st.colors[key.id]) : base;
+          else {
+            // Palette, arc-en-ciel : la couleur change au creux de chaque respiration
+            const cycle = Math.floor(u + 0.25);
+            c = fx.colors === 'palette' ? pal[((cycle % pal.length) + pal.length) % pal.length] : hsvToRgb(cycle * 67, 1, 1);
+          }
+          rgb = scale(c, level);
           break;
         }
         case 'wave': {
-          let pos;
-          switch (st.direction) {
-            case 'rl': pos = 1 - key.x / layout.bounds.w; break;
-            case 'tb': pos = key.y / layout.bounds.h; break;
-            case 'bt': pos = 1 - key.y / layout.bounds.h; break;
-            default: pos = key.x / layout.bounds.w;
-          }
-          rgb = hsvToRgb((pos * 360 + this.t * speed * 120) % 360, 1, 1);
+          const pos = dirPos(key) / (fx.width / 100);
+          if (fx.colors === 'palette') rgb = samplePalette(pal, pos - this.t * speed * 0.33);
+          else if (fx.colors === 'duo') rgb = lerpRgb(base, color2, wave01(pos - this.t * speed * 0.33));
+          else rgb = hsvToRgb((pos * 360 + this.t * speed * 120) % 360, 1, 1);
           break;
         }
         case 'rainbow':
-          rgb = hsvToRgb((this.t * speed * 60) % 360, 1, 1);
+          rgb = fx.colors === 'palette'
+            ? samplePalette(pal, this.t * speed * 0.17)
+            : hsvToRgb((this.t * speed * 60) % 360, 1, 1);
           break;
         case 'reactive': {
           const glow = this.reactiveKeys.get(key.id) || 0;
-          rgb = scale(base, glow);
+          rgb = scale(this.reactiveColors.get(key.id) || base, glow);
           break;
         }
         case 'sparkle': {
-          if (Math.random() < 0.002 * speed * 3) this.sparkles.set(key.id, 1);
+          if (Math.random() < 0.006 * speed * (fx.density / 100)) {
+            this.sparkles.set(key.id, 1);
+            this.sparkleColors.set(key.id, this.eventColor(fx.colors, pal));
+          }
           const s = this.sparkles.get(key.id) || 0;
-          rgb = scale(base, s);
+          rgb = scale(this.sparkleColors.get(key.id) || base, s);
           break;
         }
         case 'ripple': {
           // Onde de choc : anneaux qui se propagent depuis chaque frappe
           const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
+          const w = fx.width / 100, reach = fx.reach / 100;
           let inten = 0;
+          let color = null;
           for (const rp of this.ripples) {
             const age = this.t - rp.t0;
             const ringR = age * (4 + speed * 7);
             const d = Math.hypot(cx - rp.x, cy - rp.y);
-            const band = Math.exp(-((d - ringR) ** 2) / 0.6);
-            const fade = Math.max(0, 1 - age * 0.5);
-            inten = Math.max(inten, band * fade);
+            const band = Math.exp(-((d - ringR) ** 2) / (0.6 * w * w));
+            const fade = Math.max(0, 1 - (age * 0.5) / reach);
+            if (band * fade > inten) { inten = band * fade; color = rp.color; }
           }
-          rgb = scale(base, Math.min(1, inten));
+          rgb = scale(color || base, Math.min(1, inten));
           break;
         }
         case 'fire': {
           const depth = key.y / layout.bounds.h;             // 0 haut, 1 bas
           const n = fnoise(key.x * 0.45, this.t * (1 + speed));
-          rgb = firePalette(depth * 0.85 + n * 0.6 - 0.3);
+          const v = depth * 0.85 + n * 0.6 - 0.3 + (fx.height / 100 - 1) * 0.35;
+          if (fx.colors === 'duo') {
+            // Noir -> couleur principale -> couleur 2
+            rgb = v < 0.5 ? lerpRgb([0, 0, 0], base, clamp01(v * 2)) : lerpRgb(base, color2, clamp01(v * 2 - 1));
+          } else if (fx.colors === 'palette') {
+            rgb = scale(paletteLinear(pal, v), clamp01(v * 1.8));
+          } else {
+            rgb = firePalette(v);
+          }
           break;
         }
         case 'rain': {
           const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
+          const tail = 3 * (fx.length / 100);
           let inten = 0;
+          let color = null;
           for (const dr of this.drops) {
             if (Math.abs(cx - dr.x) > 0.7) continue;
             const headY = (this.t - dr.t0) * dr.v;
             const dy = headY - cy;
-            if (dy >= -0.3 && dy < 3) inten = Math.max(inten, dy < 0.6 ? 1 : 1 - dy / 3);
+            if (dy >= -0.3 && dy < tail) {
+              const v = dy < 0.6 ? 1 : 1 - dy / tail;
+              if (v > inten) { inten = v; color = dr.color; }
+            }
           }
-          rgb = scale(base, inten);
+          rgb = scale(color || base, inten);
           break;
         }
         case 'scanner': {
           const w = layout.bounds.w;
-          const p = (this.t * (2 + speed * 5)) % (2 * w);
-          const barX = p < w ? p : 2 * w - p;
+          const travel = this.t * (2 + speed * 5);
+          const p = travel % (2 * w);
+          const forward = p < w;
+          const barX = forward ? p : 2 * w - p;
           const cx = key.x + key.w / 2;
-          rgb = scale(base, Math.exp(-((cx - barX) ** 2) / 1.1));
+          let c = base;
+          if (fx.colors === 'duo') c = forward ? base : color2;            // aller / retour
+          else if (fx.colors === 'rainbow') c = hsvToRgb((this.t * speed * 40) % 360, 1, 1);
+          else if (fx.colors === 'palette') c = pal[Math.floor(travel / w) % pal.length]; // une couleur par passage
+          const bw = fx.width / 100;
+          rgb = scale(c, Math.exp(-((cx - barX) ** 2) / (1.1 * bw * bw)));
           break;
         }
         case 'spiral': {
           const cx = layout.bounds.w / 2, cy = layout.bounds.h / 2;
           const ang = Math.atan2(key.y + key.h / 2 - cy, (key.x + key.w / 2 - cx) * 0.45);
-          rgb = hsvToRgb((ang / (2 * Math.PI)) * 360 + this.t * speed * 160, 1, 1);
+          const a = (ang / (2 * Math.PI)) * fx.arms + (this.t * speed * 160) / 360; // en tours
+          if (fx.colors === 'palette') rgb = samplePalette(pal, a);
+          else if (fx.colors === 'duo') rgb = lerpRgb(base, color2, wave01(a));
+          else rgb = hsvToRgb(a * 360, 1, 1);
           break;
         }
         case 'disco': {
           const seed = Math.floor(this.t * (0.8 + speed * 2.5));
           const h = hashKey(key.id, seed);
-          rgb = (h % 100 < 42) ? hsvToRgb(h % 360, 1, 1) : [0, 0, 0];
+          if (h % 100 < fx.density) {
+            rgb = fx.colors === 'palette' ? pal[h % pal.length] : fx.colors === 'base' ? base : hsvToRgb(h % 360, 1, 1);
+          }
           break;
         }
         case 'palette': {
@@ -451,17 +553,15 @@ class LedEngine extends EventEmitter {
           // choisie, avec un fondu entre deux couleurs voisines
           const cx = (key.x + key.w / 2) / layout.bounds.w;
           const cy = (key.y + key.h / 2) / layout.bounds.h;
-          const pos = { rl: 1 - cx, tb: cy, bt: 1 - cy }[st.direction] ?? cx;
-          const p = (((pos - this.t * speed * 0.18) % 1) + 1) % 1 * n;
-          const i = Math.floor(p) % n;
-          const f = p - Math.floor(p);
-          rgb = lerpRgb(pal[i], pal[(i + 1) % n], f * f * (3 - 2 * f));
+          const pos = ({ rl: 1 - cx, tb: cy, bt: 1 - cy }[st.direction] ?? cx) / (fx.width / 100);
+          rgb = samplePalette(pal, pos - this.t * speed * 0.18);
           break;
         }
         case 'gradient': {
-          const p = (key.x + key.w / 2) / layout.bounds.w;
-          const f = (Math.sin((p - this.t * speed * 0.35) * Math.PI * 2) + 1) / 2;
-          rgb = lerpRgb(base, color2, f);
+          const p = (key.x + key.w / 2) / layout.bounds.w / (fx.width / 100);
+          rgb = fx.colors === 'palette'
+            ? samplePalette(pal, p - this.t * speed * 0.35)
+            : lerpRgb(base, color2, wave01(p - this.t * speed * 0.35));
           break;
         }
         case 'sysmon': {
@@ -473,7 +573,8 @@ class LedEngine extends EventEmitter {
             const value = cpuIdx >= 0 ? this.stats.cpu : this.stats.ram;
             const n = SYSMON_CPU_KEYS.length;
             const lit = clamp01(value * n - idx); // remplissage partiel du dernier segment
-            rgb = scale(gaugeColor(idx / (n - 1)), 0.06 + 0.94 * lit);
+            const f = idx / (n - 1);
+            rgb = scale(fx.colors === 'duo' ? lerpRgb(base, color2, f) : gaugeColor(f), 0.06 + 0.94 * lit);
           } else {
             rgb = scale(base, 0.25);
           }
@@ -485,8 +586,11 @@ class LedEngine extends EventEmitter {
           const cx = key.x + key.w / 2, cy = key.y + key.h / 2;
           const band = Math.min(AUDIO_BANDS - 1, Math.floor((cx / layout.bounds.w) * AUDIO_BANDS));
           const height = (layout.bounds.h - cy) / layout.bounds.h; // 0 bas .. 1 haut
-          const level = this.audio[band];
-          rgb = level >= height ? lerpRgb(base, color2, height) : scale(base, 0.04);
+          const level = Math.min(1, this.audio[band] * (fx.gain / 100));
+          if (level < height) rgb = scale(base, 0.04);
+          else if (fx.colors === 'rainbow') rgb = hsvToRgb((band / AUDIO_BANDS) * 300, 1, 1);
+          else if (fx.colors === 'palette') rgb = paletteLinear(pal, height);
+          else rgb = lerpRgb(base, color2, height);
           break;
         }
         case 'heatmap': {
@@ -495,7 +599,9 @@ class LedEngine extends EventEmitter {
             rgb = scale(base, 0.06);
           } else {
             const f = Math.log1p(c) / heatLog;           // 0..1
-            rgb = hsvToRgb(240 - 240 * f, 1, 0.3 + 0.7 * f); // bleu -> vert -> jaune -> rouge
+            rgb = fx.colors === 'duo'
+              ? scale(lerpRgb(base, color2, f), 0.3 + 0.7 * f)
+              : hsvToRgb(240 - 240 * f, 1, 0.3 + 0.7 * f); // bleu -> vert -> jaune -> rouge
           }
           break;
         }
@@ -504,7 +610,10 @@ class LedEngine extends EventEmitter {
           const col = Math.min(SCREEN_COLS - 1, Math.floor((cx / layout.bounds.w) * SCREEN_COLS));
           const row = Math.min(SCREEN_ROWS - 1, Math.floor((cy / layout.bounds.h) * SCREEN_ROWS));
           const i = (row * SCREEN_COLS + col) * 3;
-          rgb = [Math.round(this.screen[i]), Math.round(this.screen[i + 1]), Math.round(this.screen[i + 2])];
+          const c = [this.screen[i], this.screen[i + 1], this.screen[i + 2]];
+          const sat = fx.saturation / 100;
+          const gray = (c[0] + c[1] + c[2]) / 3;
+          rgb = c.map((v) => Math.round(Math.max(0, Math.min(255, gray + (v - gray) * sat))));
           break;
         }
         default:
@@ -524,18 +633,21 @@ class LedEngine extends EventEmitter {
     }
 
     // Nettoyage des ondes et gouttes expirées
-    this.ripples = this.ripples.filter((rp) => this.t - rp.t0 < 2.5);
-    this.drops = this.drops.filter((dr) => (this.t - dr.t0) * dr.v < layout.bounds.h + 4);
+    const rippleLife = 2 * (fxSettings(st, 'ripple').reach / 100) + 0.5;
+    const tailMax = 3 * (fxSettings(st, 'rain').length / 100) + 1;
+    this.ripples = this.ripples.filter((rp) => this.t - rp.t0 < rippleLife);
+    this.drops = this.drops.filter((dr) => (this.t - dr.t0) * dr.v < layout.bounds.h + tailMax);
 
     // Décroissance des effets réactif/étincelles (mêmes vitesses qu'avant
     // à 30 img/s, mais indexées sur le temps réel)
+    const fadeMul = st.effect === 'reactive' ? 100 / fx.fade : 1; // durée de la lueur réglable
     for (const [k, v] of this.reactiveKeys) {
-      const nv = v - 1.2 * (0.5 + speed) * elapsed;
-      if (nv <= 0) this.reactiveKeys.delete(k); else this.reactiveKeys.set(k, nv);
+      const nv = v - 1.2 * (0.5 + speed) * elapsed * fadeMul;
+      if (nv <= 0) { this.reactiveKeys.delete(k); this.reactiveColors.delete(k); } else this.reactiveKeys.set(k, nv);
     }
     for (const [k, v] of this.sparkles) {
       const nv = v - 0.9 * (0.5 + speed) * elapsed;
-      if (nv <= 0) this.sparkles.delete(k); else this.sparkles.set(k, nv);
+      if (nv <= 0) { this.sparkles.delete(k); this.sparkleColors.delete(k); } else this.sparkles.set(k, nv);
     }
     return out;
   }

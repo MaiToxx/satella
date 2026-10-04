@@ -274,6 +274,35 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     check('vague de couleurs : mode respiration', !(await page.isVisible('#kb-dir-group'))
       && (await page.evaluate(async () => (await window.satella.init()).ledState.keyboard.paletteMode)) === 'breathe');
     await page.click('#kb-effects button[data-fx="static"]');
+    await sleep(200);
+    check('effet fixe : pas de réglages', !(await page.isVisible('#kb-fx-group')));
+
+    // Réglages propres à chaque effet
+    const kbFx = () => page.evaluate(async () => (await window.satella.init()).ledState.keyboard.fx || {});
+    await page.click('#kb-effects button[data-fx="fire"]');
+    await sleep(200);
+    check('flammes : réglages affichés', await page.isVisible('#fx-colors')
+      && (await page.locator('#kb-fx-settings .fx-param').count()) === 1 && !(await page.isVisible('#kb-color2')));
+    await page.selectOption('#fx-colors', 'duo');
+    await sleep(200);
+    check('flammes : deux couleurs', (await kbFx()).fire?.colors === 'duo' && await page.isVisible('#kb-color2'));
+    await page.click('#kb-effects button[data-fx="wave"]');
+    await sleep(200);
+    check('vague : natif par défaut', !(await page.textContent('#kb-fx-settings')).includes('Satella calcule'));
+    await page.selectOption('#fx-colors', 'palette');
+    await sleep(200);
+    check('vague : palette personnalisée', (await kbFx()).wave?.colors === 'palette'
+      && await page.isVisible('#kb-palette') && !(await page.isVisible('#pal-mode'))
+      && (await page.textContent('#kb-fx-settings')).includes('Satella calcule'));
+    await page.locator('#kb-fx-settings .fx-param[data-id="width"]').fill('200');
+    await sleep(200);
+    check('vague : largeur réglée', (await kbFx()).wave?.width === 200
+      && (await page.textContent('#kb-fx-settings [data-val="width"]')) === '200%');
+    await page.click('#fx-reset');
+    await sleep(200);
+    check('vague : réglages par défaut', !(await kbFx()).wave && (await kbFx()).fire?.colors === 'duo'
+      && !(await page.isVisible('#fx-reset')) && !(await page.isVisible('#kb-palette')));
+    await page.click('#kb-effects button[data-fx="static"]');
 
     // Renommage, réglages mis de côté avant un autre profil
     await page.click('.nav-btn[data-page="profiles"]');
