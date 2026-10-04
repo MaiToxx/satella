@@ -412,6 +412,9 @@ function setupEngines() {
   });
   // Un clic = l'utilisateur change probablement de champ de saisie
   macroEngine.on('mouse-activity', () => snippetEngine.reset());
+  // Turbos « tant que maintenu »
+  macroEngine.on('mouse-button', ({ button, down }) => { if (button) holdTurboInput({ type: 'mouse', button }, down); });
+  macroEngine.on('key-activity', ({ key, down }) => { if (key) holdTurboInput({ type: 'key', key }, down); });
   macroEngine.on('record-event', (step) => send('macro:record-event', step));
   macroEngine.on('play-state', (s) => {
     send('macro:play-state', s);
@@ -564,7 +567,10 @@ function refreshShortcuts() {
       shortcutErrors.push(describe(err, m ? `macro « ${m.name} »` : ''));
     }
     turbos.forEach((t, i) => {
-      if (!t.enabled || !t.accelerator) return;
+      if (t.enabled && t.mode === 'hold' && sanitize.turboHoldConflict(t)) {
+        shortcutErrors.push({ kind: 'turbo', id: t.id, accelerator: '', reason: 'le bouton maintenu ne peut pas être la cible du turbo' });
+      }
+      if (!t.enabled || t.mode === 'hold' || !t.accelerator) return;
       const label = `turbo n°${i + 1}`;
       const k = normAccel(t.accelerator);
       if (!owners.has(k)) owners.set(k, label);
@@ -574,7 +580,7 @@ function refreshShortcuts() {
       } catch { /* accélérateur invalide */ }
       if (!ok) shortcutErrors.push(describe({ kind: 'turbo', id: t.id, accelerator: t.accelerator }, label));
     });
-    snippetEngine.setSnippets(store.read('snippets', []));
+    snippetEngine.setSnippets(snippetsPaused() ? [] : store.read('snippets', []));
   } else {
     macroEngine.stop();
     stopAllTurbos();
@@ -586,6 +592,13 @@ function refreshShortcuts() {
     console.log('[raccourcis] refusés :', shortcutErrors.map((e) => `${e.accelerator} (${e.reason})`).join(', '));
   }
   send('shortcuts:errors', shortcutErrors);
+}
+
+// Abréviations en pause dans le profil actif (option du profil, pour les jeux)
+function snippetsPaused() {
+  if (!sessionState.activeProfile) return false;
+  const p = store.read('profiles', []).find((x) => x.name === sessionState.activeProfile);
+  return !!(p && p.noSnippets);
 }
 
 // Raccourcis de l'application (Paramètres) : actifs même macros coupées.
@@ -608,7 +621,7 @@ function registerAppShortcuts() {
       if (m.enabled && m.trigger && m.trigger.accelerator) taken.set(normAccel(m.trigger.accelerator), `macro « ${m.name} »`);
     }
     turbos.forEach((t, i) => {
-      if (t.enabled && t.accelerator) taken.set(normAccel(t.accelerator), `turbo n°${i + 1}`);
+      if (t.enabled && t.mode !== 'hold' && t.accelerator) taken.set(normAccel(t.accelerator), `turbo n°${i + 1}`);
     });
   }
   const shortcuts = settings.appShortcuts || {};
@@ -665,12 +678,27 @@ function stepBrightness(dir) {
 // Chaque coup est un vrai appui maintenu quelques millisecondes (les jeux
 // ignorent souvent un appui de 0 ms).
 function toggleTurbo(id) {
-  const t = turbos.find((x) => x.id === id);
-  if (!t) return;
-  if (turboRunning.has(id)) {
-    stopTurbo(id);
-    return;
+  if (turboRunning.has(id)) stopTurbo(id);
+  else startTurbo(id);
+}
+
+// Turbos « tant que maintenu » : bouton de souris ou touche physique
+// enfoncé -> répétition, relâché -> arrêt (écoute globale)
+const holdTurbos = () => (settings.macrosEnabled
+  ? turbos.filter((t) => t.enabled && t.mode === 'hold' && !sanitize.turboHoldConflict(t)) : []);
+function holdTurboInput(trigger, down) {
+  for (const t of holdTurbos()) {
+    const h = t.hold || {};
+    const match = h.type === trigger.type && (h.type === 'key' ? h.key === trigger.key : h.button === trigger.button);
+    if (!match) continue;
+    if (down && !turboRunning.has(t.id)) startTurbo(t.id);
+    else if (!down && turboRunning.has(t.id)) stopTurbo(t.id);
   }
+}
+
+function startTurbo(id) {
+  const t = turbos.find((x) => x.id === id);
+  if (!t || turboRunning.has(id)) return;
   if (!input.available) return;
   const cps = Math.max(1, Math.min(50, t.cps || 10));
   const period = Math.round(1000 / cps);
@@ -698,9 +726,10 @@ function toggleTurbo(id) {
     upTimer = setTimeout(release, hold);
   };
   fire();
-  turboRunning.set(id, { timer: setInterval(fire, period), release });
+  turboRunning.set(id, { timer: setInterval(fire, period), release, hold: t.mode === 'hold' });
   send('turbo:state', { id, running: true });
-  if (settings.flashOnMacro) flashKeyboard([255, 170, 0]);
+  // Pas de flash à chaque appui d'un turbo maintenu
+  if (settings.flashOnMacro && t.mode !== 'hold') flashKeyboard([255, 170, 0]);
 }
 
 function stopTurbo(id) {
@@ -710,7 +739,7 @@ function stopTurbo(id) {
   st.release();
   turboRunning.delete(id);
   send('turbo:state', { id, running: false });
-  if (settings.flashOnMacro) flashKeyboard([255, 40, 40]);
+  if (settings.flashOnMacro && !st.hold) flashKeyboard([255, 40, 40]);
 }
 
 function stopAllTurbos() {
@@ -1082,7 +1111,7 @@ function setupPowerEvents() {
 function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
   const forLeds = settings.ledsEnabled && (eff === 'reactive' || eff === 'ripple');
-  const forMacros = settings.macrosEnabled && (macroEngine.recording || snippetEngine.active);
+  const forMacros = settings.macrosEnabled && (macroEngine.recording || snippetEngine.active || holdTurbos().length > 0);
   const needed = forLeds || forMacros || calibrating || hookDebug || settings.keyStats
     || macroEngine.waitingForKey;
   if (needed) macroEngine.startActivityFeed();
@@ -1632,7 +1661,7 @@ function setupIpc() {
   ipcMain.handle('snippets:get', () => store.read('snippets', []));
   ipcMain.handle('snippets:set', (e, list) => {
     store.write('snippets', list || []);
-    if (settings.macrosEnabled) snippetEngine.setSnippets(list);
+    if (settings.macrosEnabled) snippetEngine.setSnippets(snippetsPaused() ? [] : list);
     updateHookNeed();
     return list;
   });
@@ -1644,6 +1673,7 @@ function setupIpc() {
     store.write('turbos', turbos);
     stopAllTurbos();
     refreshShortcuts();
+    updateHookNeed(); // turbos maintenus : écoute globale
     return turbos;
   });
   ipcMain.handle('shortcuts:errors', () => shortcutErrors);
@@ -1722,6 +1752,7 @@ function setupIpc() {
       apps: previous.apps || [],
       isDefault: !!previous.isDefault,
       schedule: previous.schedule || null,
+      noSnippets: !!previous.noSnippets,
     });
     store.write('profiles', profiles);
     sessionState = { activeProfile: name, dirty: false };
@@ -1761,9 +1792,14 @@ function setupIpc() {
       p.isDefault = !!meta.isDefault;
     }
     if (meta.schedule !== undefined) p.schedule = sanitize.schedule(meta.schedule);
+    if (meta.noSnippets !== undefined) p.noSnippets = !!meta.noSnippets;
     store.write('profiles', profiles);
     lastFgExe = ''; // réévaluer la bascule avec les nouvelles règles
     lastAutoTarget = null;
+    if (meta.noSnippets !== undefined && name === sessionState.activeProfile) {
+      refreshShortcuts();
+      updateHookNeed();
+    }
     return profilesPayload();
   });
   // Copie d'un profil (sans applications liées ni horaire, pour ne pas

@@ -90,6 +90,7 @@ const DEFAULT_DEVICE_STATE = () => ({
   colors: {},              // couleurs personnalisées par touche/zone (mode static)
   overlay: {},             // calque : touches fixes par-dessus n'importe quel effet
   palette: [...DEFAULT_PALETTE], // vague de couleurs : 2 à 6 couleurs
+  paletteMode: 'wave',     // 'wave' (défilement) | 'breathe' (tout le clavier en fondu)
 });
 
 // Rangées utilisées par la jauge système
@@ -436,12 +437,21 @@ class LedEngine extends EventEmitter {
           break;
         }
         case 'palette': {
-          // Les couleurs de la palette défilent en boucle, dans la direction
+          const n = pal.length;
+          if (st.paletteMode === 'breathe') {
+            // Respiration : tout le clavier passe d'une couleur à la suivante,
+            // avec un léger creux de luminosité pendant le fondu
+            const p = (this.t * speed * 0.25) % n;
+            const i = Math.floor(p);
+            const f = p - i;
+            rgb = scale(lerpRgb(pal[i], pal[(i + 1) % n], f * f * (3 - 2 * f)), 0.4 + 0.6 * (1 - Math.sin(Math.PI * f)));
+            break;
+          }
+          // Vague : les couleurs défilent en boucle, dans la direction
           // choisie, avec un fondu entre deux couleurs voisines
           const cx = (key.x + key.w / 2) / layout.bounds.w;
           const cy = (key.y + key.h / 2) / layout.bounds.h;
           const pos = { rl: 1 - cx, tb: cy, bt: 1 - cy }[st.direction] ?? cx;
-          const n = pal.length;
           const p = (((pos - this.t * speed * 0.18) % 1) + 1) % 1 * n;
           const i = Math.floor(p) % n;
           const f = p - Math.floor(p);

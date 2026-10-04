@@ -269,6 +269,10 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await sleep(200);
     const pal = await page.evaluate(async () => (await window.satella.init()).ledState.keyboard.palette);
     check('vague de couleurs : palette toute prête', JSON.stringify(pal) === '["#003cff","#00c2ff","#00ffd0"]', JSON.stringify(pal));
+    await page.selectOption('#pal-mode', 'breathe');
+    await sleep(200);
+    check('vague de couleurs : mode respiration', !(await page.isVisible('#kb-dir-group'))
+      && (await page.evaluate(async () => (await window.satella.init()).ledState.keyboard.paletteMode)) === 'breathe');
     await page.click('#kb-effects button[data-fx="static"]');
 
     // Renommage, réglages mis de côté avant un autre profil
@@ -278,6 +282,14 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#ask-ok');
     await sleep(300);
     check('renommage du profil actif', (await page.textContent('.side-profile')).includes('Bureau perso'));
+    await page.check('.profile-row.active .p-nosnip');
+    await sleep(300);
+    const pausedShown = () => page.evaluate(() => !document.getElementById('snippet-paused').hidden);
+    check('abréviations en pause dans le profil actif', await pausedShown()
+      && (await page.evaluate(() => window.satella.profiles.list())).profiles.find((p) => p.name === 'Bureau perso').noSnippets === true);
+    await page.uncheck('.profile-row.active .p-nosnip');
+    await sleep(300);
+    check('abréviations réactivées', !(await pausedShown()));
     await page.click('.profile-row[data-name="Bureau perso"] .p-dup');
     await sleep(300);
     check('profil dupliqué', (await page.locator('.profile-row[data-name="Bureau perso (copie)"]').count()) === 1);
@@ -414,6 +426,13 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await sleep(300);
     check('palette ouverte par la commande globale', await page.isVisible('#palette-input'));
     await page.keyboard.press('Escape');
+
+    // ---- Aide des raccourcis (Ctrl+/) ----
+    await page.keyboard.press('Control+/');
+    await sleep(200);
+    const helpText = await page.textContent('#modal');
+    check('aide des raccourcis', helpText.includes('Raccourcis clavier') && helpText.includes('Ctrl+K'), helpText.slice(0, 80));
+    await page.click('#keys-close');
 
     // ---- Glisser-déposer : superposition, fichiers refusés ----
     const dropFile = async (name) => {
@@ -555,6 +574,20 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.keyboard.press('Control+Alt+KeyK');
     await sleep(500);
     check('conflit turbo / macro signalé', (await page.locator('.turbo-row .warn-text').count()) === 1);
+    // Turbo « tant que maintenu » : déclencheur = bouton, pas de raccourci ; refus si cible = déclencheur
+    await page.selectOption('.turbo-row >> nth=-1 >> .tb-mode', 'hold');
+    await sleep(400);
+    const lastTurbo = page.locator('.turbo-row').last();
+    check('turbo maintenu : choix du bouton', await lastTurbo.locator('.tb-hold').isVisible()
+      && !(await lastTurbo.locator('.tb-accel').isVisible()));
+    await lastTurbo.locator('.tb-hold').selectOption('mouse:right');
+    await sleep(300);
+    await page.locator('.turbo-row').last().locator('.tb-target').selectOption('mouse:right');
+    await sleep(500);
+    const holdTb = (await page.evaluate(() => window.satella.turbos.get())).pop();
+    check('turbo maintenu enregistré', holdTb.mode === 'hold' && holdTb.hold.button === 'right', JSON.stringify(holdTb));
+    check('turbo maintenu : cible = déclencheur refusée',
+      (await page.locator('.turbo-row').last().textContent()).includes('ne peut pas être la cible'));
 
     check('aucune erreur JavaScript', errors.length === 0, errors.join(' | '));
   } finally {

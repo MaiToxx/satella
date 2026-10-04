@@ -694,3 +694,10 @@ kbd {
 }
 .pal-del:hover { color: var(--danger); border-color: var(--danger); }
 #pal-preset { font-size: 12px; padding: 4px 6px; }
+#pal-mode { font-size: 12px; padding: 4px 6px; }
+
+/* Aide des raccourcis */
+.keys-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 13px; }
+.keys-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.keys-table td:first-child { width: 190px; white-space: nowrap; }
+.keys-table kbd { font-size: 11.5px; }

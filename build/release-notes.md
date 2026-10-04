@@ -1,6 +1,5 @@
 ## Nouveautés
-- Effet « Vague de couleurs » : tes propres couleurs (2 à 6) défilent sur le clavier dans la direction choisie. Six palettes toutes prêtes : Coucher de soleil, Océan, Forêt, Néon, Braise, Arc-en-ciel.
-- Nouvelles étapes de macro : « Charger un profil » et « Effet clavier » (avec couleur facultative). Par exemple une macro « Mode stream » qui lance OBS et passe le clavier en rouge.
-- Zone de notification : sous-menu « Effet du clavier » pour changer d'effet sans ouvrir Satella.
-- Page Profils : bouton « Dupliquer » pour partir d'un profil existant.
-- Statistiques : répartition des frappes selon l'heure de la journée.
+- Turbo « tant que maintenu » : le clic (ou la touche) se répète tant que tu maintiens un bouton de la souris (bouton latéral, molette, clic droit) ou une touche, et s'arrête dès que tu relâches. Idéal pour le clic automatique en jeu.
+- Vague de couleurs : nouveau mode « Respiration », où tout le clavier passe en douceur d'une couleur de ta palette à la suivante.
+- Profils : option « Sans abréviations » pour mettre l'expansion de texte en pause tant que le profil est actif (pratique pour les jeux).
+- Aide des raccourcis (Ctrl+/, ou depuis la palette et les Paramètres) : tous les raccourcis de Satella et ceux que tu as réglés, au même endroit.

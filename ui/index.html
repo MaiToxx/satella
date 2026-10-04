@@ -250,6 +250,7 @@
             Variables : <code>{date}</code> <code>{heure}</code> <code>{jour}</code> <code>{mois}</code>
             <code>{annee}</code> <code>{presse-papiers}</code> (texte copié) et <code>{curseur}</code>
             (le curseur s'y place à la fin, par exemple <code>&lt;b&gt;{curseur}&lt;/b&gt;</code>).</p>
+          <p class="warn-text" id="snippet-paused" hidden style="margin-bottom:10px"></p>
           <div id="snippet-list"></div>
           <button class="btn small" id="snippet-add" style="margin-top:10px">Ajouter une abréviation</button>
         </div>
@@ -257,8 +258,9 @@
         <h2>Mode turbo</h2>
         <div class="panel">
           <p class="muted" style="margin-bottom:12px">
-            Un raccourci démarre la répétition automatique d'un clic ou d'une touche à la
-            cadence choisie ; le même raccourci l'arrête.</p>
+            Répète automatiquement un clic ou une touche à la cadence choisie : soit un
+            raccourci la démarre et l'arrête, soit elle dure tant que tu maintiens un bouton
+            de la souris (bouton latéral par exemple) ou une touche.</p>
           <div id="turbo-list"></div>
           <button class="btn small" id="turbo-add" style="margin-top:10px">Ajouter un turbo</button>
         </div>
@@ -533,7 +535,8 @@
         <h2>Raccourcis de l'application</h2>
         <div class="panel">
           <p class="muted" style="margin-bottom:6px">Actifs partout dans Windows, même quand les macros sont
-            coupées. Clique sur un champ puis presse le raccourci.</p>
+            coupées. Clique sur un champ puis presse le raccourci.
+            <button class="btn small" id="keys-help" style="margin-left:6px">Tous les raccourcis (Ctrl+/)</button></p>
           <div id="app-shortcuts"></div>
         </div>
         <h2>Empreinte mémoire de Satella</h2>
