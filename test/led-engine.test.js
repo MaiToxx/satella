@@ -178,3 +178,15 @@ test('témoins : touche allumée par-dessus l’effet, sans toucher à l’état
   assert.equal(e.hasLiveLayers(), false);
   assert.deepEqual(e.computeKeyboard().capslock, [0, 0, 0]);
 });
+
+test('vague de couleurs : les couleurs de la palette défilent sur le clavier', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'palette', palette: ['#ff0000', '#0000ff'], brightness: 100, direction: 'lr' });
+  const a = e.computeKeyboard();
+  assert.ok(a.esc[0] > 200 && a.esc[2] < 60, `début de palette à gauche : ${a.esc}`);
+  assert.ok(a.space[2] > 0 && a.space[0] > 0, 'fondu au milieu');
+  e.t += 1;
+  const b = e.computeKeyboard();
+  assert.notDeepEqual(b.esc, a.esc, 'la vague avance avec le temps');
+  assert.equal(e.isAnimated('palette'), true);
+});

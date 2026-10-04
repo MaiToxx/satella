@@ -125,6 +125,26 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     const opened = await app.evaluate(() => global.__opened);
     check('macro « Ouvrir » jouée sans injection de touches', JSON.stringify(opened) === '["https://example.com/seul"]',
       JSON.stringify(opened));
+    // Étape « Effet clavier » : jouée sans injection, l'effet et la couleur changent
+    await page.click('#me-add-bar button:has-text("Effet clavier")');
+    await page.selectOption('#sf-effect', 'fire');
+    await page.check('#sf-color-on');
+    await page.fill('#sf-color', '#ff3300');
+    await page.click('#sf-ok');
+    await page.click('#me-play');
+    await sleep(400);
+    const fxState = await page.evaluate(async () => (await window.satella.init()).ledState.keyboard);
+    check('étape « Effet clavier »', fxState.effect === 'fire' && fxState.baseColor === '#ff3300',
+      `${fxState.effect} ${fxState.baseColor}`);
+    // Étape « Charger un profil » : description, puis annulée (Ctrl+Z)
+    const stepsBefore = await page.locator('#me-steps .step-row:not(.add-row)').count();
+    await page.click('#me-add-bar button:has-text("Charger un profil")');
+    await page.fill('#sf-profile', 'Soirée');
+    await page.click('#sf-ok');
+    check('étape « Charger un profil »', (await page.evaluate(() => [...document.querySelectorAll('.s-desc')]
+      .map((e) => e.textContent).pop())) === 'Profil « Soirée »');
+    await page.keyboard.press('Control+z');
+    check('étape « Charger un profil » annulée', (await page.locator('#me-steps .step-row:not(.add-row)').count()) === stepsBefore);
     // Étape « Attendre une touche »
     await page.click('#me-add-bar button:has-text("Attendre touche")');
     await page.selectOption('#sf-key', 'f8');
@@ -238,6 +258,19 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
       && (await page.locator('#kb-fx-hint button').count()) === 0);
     await page.click('#kb-effects button[data-fx="static"]');
 
+    // Vague de couleurs : palette modifiable
+    await page.click('#kb-effects button[data-fx="palette"]');
+    await sleep(200);
+    check('vague de couleurs : éditeur', (await page.locator('#kb-palette .pal-chip').count()) === 3
+      && await page.isVisible('#kb-dir-group'));
+    await page.click('#pal-add');
+    check('vague de couleurs : couleur ajoutée', (await page.locator('#kb-palette .pal-chip').count()) === 4);
+    await page.selectOption('#pal-preset', '1'); // Océan
+    await sleep(200);
+    const pal = await page.evaluate(async () => (await window.satella.init()).ledState.keyboard.palette);
+    check('vague de couleurs : palette toute prête', JSON.stringify(pal) === '["#003cff","#00c2ff","#00ffd0"]', JSON.stringify(pal));
+    await page.click('#kb-effects button[data-fx="static"]');
+
     // Renommage, réglages mis de côté avant un autre profil
     await page.click('.nav-btn[data-page="profiles"]');
     await page.click('.p-rename');
@@ -245,6 +278,11 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#ask-ok');
     await sleep(300);
     check('renommage du profil actif', (await page.textContent('.side-profile')).includes('Bureau perso'));
+    await page.click('.profile-row[data-name="Bureau perso"] .p-dup');
+    await sleep(300);
+    check('profil dupliqué', (await page.locator('.profile-row[data-name="Bureau perso (copie)"]').count()) === 1);
+    await page.click('.profile-row[data-name="Bureau perso (copie)"] .p-del');
+    await sleep(300);
     await page.fill('#profile-name', 'Jeu');
     await page.click('#profile-save');
     await sleep(200);
@@ -432,7 +470,8 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#set-stats-open');
     await sleep(300);
     check('statistiques détaillées', (await page.locator('#modal .stat-tile').count()) === 4
-      && (await page.locator('#modal svg.chart .hit').count()) === 30);
+      && (await page.locator('#modal svg.chart >> nth=0').locator('.hit').count()) === 30
+      && (await page.locator('#modal svg.chart >> nth=1').locator('.hit').count()) === 24);
     await page.click('#stats-close');
     check('statistiques fermées', !(await page.isVisible('#modal-backdrop'))
       && !(await page.evaluate(() => document.getElementById('modal').classList.contains('wide'))));

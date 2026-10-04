@@ -6,12 +6,13 @@ const FORMAT = 'satella';
 const FORMAT_VERSION = 1;
 
 const KB_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'reactive', 'ripple', 'sparkle',
-  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'screen', 'heatmap', 'off'];
+  'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient', 'sysmon', 'audio', 'screen', 'heatmap', 'palette', 'off'];
+const DEFAULT_PALETTE = ['#ff2a6d', '#ff9f1c', '#ffe066'];
 const MOUSE_EFFECTS = ['static', 'breathing', 'wave', 'rainbow', 'sparkle', 'off'];
 const DIRECTIONS = ['lr', 'rl', 'tb', 'bt'];
 const BUTTONS = ['left', 'right', 'middle', 'x1', 'x2'];
 const STEP_TYPES = ['keyTap', 'keyDown', 'keyUp', 'text', 'delay', 'mouseClick', 'mouseDown',
-  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro', 'open', 'waitKey'];
+  'mouseUp', 'mouseMove', 'mouseWheel', 'loop', 'runMacro', 'open', 'waitKey', 'profile', 'effect'];
 const MAX_LOOP_DEPTH = 8;
 
 // Cible d'une étape « Ouvrir » : lien web ou courriel, ou chemin Windows
@@ -61,7 +62,12 @@ function deviceState(v, effects) {
     direction: DIRECTIONS.includes(s.direction) ? s.direction : 'lr',
     colors: colorMap(s.colors),
   };
-  if (effects === KB_EFFECTS) out.overlay = colorMap(s.overlay);
+  if (effects === KB_EFFECTS) {
+    out.overlay = colorMap(s.overlay);
+    // Vague de couleurs : 2 à 6 couleurs valides
+    const pal = (Array.isArray(s.palette) ? s.palette : []).map((c) => hex(c)).filter(Boolean).slice(0, 6);
+    out.palette = pal.length >= 2 ? pal : [...DEFAULT_PALETTE];
+  }
   return out;
 }
 
@@ -125,6 +131,15 @@ function step(v, keyNames, depth) {
       out.key = key(v.key);
       out.timeoutMs = int(v.timeoutMs, 0, 600000, 0);
       if (!out.key) return null;
+      break;
+    case 'profile':
+      out.name = str(v.name, 60).trim();
+      if (!out.name) return null;
+      break;
+    case 'effect':
+      if (!KB_EFFECTS.includes(v.effect)) return null;
+      out.effect = v.effect;
+      if (hex(v.color)) out.color = hex(v.color);
       break;
     default: return null;
   }

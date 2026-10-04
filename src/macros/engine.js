@@ -33,11 +33,14 @@ const MAX_DEPTH = 16;
 class MacroEngine extends EventEmitter {
   // `injector` : module d'injection d'entrées (remplaçable pour les tests)
   // `opener` : ouvre un programme, un fichier ou un lien (étape « Ouvrir »)
-  constructor({ globalShortcut, injector = input, opener = null, clipboardRead = () => '' }) {
+  // `actions` : { loadProfile(nom) -> booléen, setEffect(effet, couleur) }
+  // pour les étapes « Charger un profil » et « Effet clavier »
+  constructor({ globalShortcut, injector = input, opener = null, clipboardRead = () => '', actions = {} }) {
     super();
     this.globalShortcut = globalShortcut;
     this.input = injector;
     this.opener = opener;
+    this.actions = actions;
     this.clipboardRead = clipboardRead; // variable {presse-papiers} des étapes « Texte »
     this.macros = [];
     this.playing = new Map(); // id -> {cancelled}
@@ -127,7 +130,7 @@ class MacroEngine extends EventEmitter {
   // actions souris ?
   needsInput(steps, seen = new Set()) {
     return (steps || []).some((s) => {
-      if (s.type === 'delay' || s.type === 'open' || s.type === 'waitKey') return false;
+      if (['delay', 'open', 'waitKey', 'profile', 'effect'].includes(s.type)) return false;
       if (s.type === 'loop') return this.needsInput(s.steps, seen);
       if (s.type === 'runMacro') {
         if (seen.has(s.macroId)) return false;
@@ -237,6 +240,14 @@ class MacroEngine extends EventEmitter {
           break;
         case 'waitKey':
           await this.waitForKey(ctx, step.key, step.timeoutMs || 0);
+          break;
+        case 'profile':
+          if (!this.actions.loadProfile) throw new Error('chargement de profil indisponible');
+          if (!this.actions.loadProfile(step.name)) throw new Error(`profil « ${step.name} » introuvable`);
+          break;
+        case 'effect':
+          if (!this.actions.setEffect) throw new Error('éclairage indisponible');
+          this.actions.setEffect(step.effect, step.color || null);
           break;
         case 'loop': {
           const count = Math.max(1, step.count || 1);

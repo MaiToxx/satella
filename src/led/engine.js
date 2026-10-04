@@ -77,6 +77,9 @@ const AUDIO_BANDS = 16;
 const SCREEN_COLS = 20;
 const SCREEN_ROWS = 6;
 
+// Vague de couleurs : palette par défaut (coucher de soleil)
+const DEFAULT_PALETTE = ['#ff2a6d', '#ff9f1c', '#ffe066'];
+
 const DEFAULT_DEVICE_STATE = () => ({
   effect: 'static',        // static | breathing | wave | rainbow | reactive | sparkle | off | effets logiciels
   baseColor: '#00a8ff',
@@ -86,6 +89,7 @@ const DEFAULT_DEVICE_STATE = () => ({
   direction: 'lr',         // lr | rl | tb | bt
   colors: {},              // couleurs personnalisées par touche/zone (mode static)
   overlay: {},             // calque : touches fixes par-dessus n'importe quel effet
+  palette: [...DEFAULT_PALETTE], // vague de couleurs : 2 à 6 couleurs
 });
 
 // Rangées utilisées par la jauge système
@@ -265,7 +269,7 @@ class LedEngine extends EventEmitter {
   isAnimated(effect) {
     return ['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
       'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
-      'sysmon', 'audio', 'screen', 'heatmap'].includes(effect);
+      'sysmon', 'audio', 'screen', 'heatmap', 'palette'].includes(effect);
   }
 
   tick() {
@@ -300,6 +304,7 @@ class LedEngine extends EventEmitter {
     const speed = 0.2 + (st.speed / 100) * 2.3;
     const base = hexToRgb(st.baseColor);
     const color2 = hexToRgb(st.color2 || '#ff00d4');
+    const pal = (Array.isArray(st.palette) && st.palette.length >= 2 ? st.palette : DEFAULT_PALETTE).map(hexToRgb);
     const out = {};
 
     // Temps réel écoulé depuis le dernier calcul : les décroissances ne
@@ -428,6 +433,19 @@ class LedEngine extends EventEmitter {
           const seed = Math.floor(this.t * (0.8 + speed * 2.5));
           const h = hashKey(key.id, seed);
           rgb = (h % 100 < 42) ? hsvToRgb(h % 360, 1, 1) : [0, 0, 0];
+          break;
+        }
+        case 'palette': {
+          // Les couleurs de la palette défilent en boucle, dans la direction
+          // choisie, avec un fondu entre deux couleurs voisines
+          const cx = (key.x + key.w / 2) / layout.bounds.w;
+          const cy = (key.y + key.h / 2) / layout.bounds.h;
+          const pos = { rl: 1 - cx, tb: cy, bt: 1 - cy }[st.direction] ?? cx;
+          const n = pal.length;
+          const p = (((pos - this.t * speed * 0.18) % 1) + 1) % 1 * n;
+          const i = Math.floor(p) % n;
+          const f = p - Math.floor(p);
+          rgb = lerpRgb(pal[i], pal[(i + 1) % n], f * f * (3 - 2 * f));
           break;
         }
         case 'gradient': {
@@ -579,5 +597,6 @@ class LedEngine extends EventEmitter {
 }
 
 module.exports = {
-  LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, AUDIO_BANDS, SCREEN_COLS, SCREEN_ROWS, TIMER_KEYS, TIMER_DONE_MS,
+  LedEngine, hexToRgb, DEFAULT_DEVICE_STATE, DEFAULT_PALETTE, AUDIO_BANDS, SCREEN_COLS, SCREEN_ROWS,
+  TIMER_KEYS, TIMER_DONE_MS,
 };
