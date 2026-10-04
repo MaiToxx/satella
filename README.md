@@ -54,7 +54,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   Étincelles, Éteint. Vitesse et luminosité réglables.
 - **Effets logiciels** (calculés par Satella et diffusés en continu via le mode
   « dynamique » du clavier, sans écriture en flash) : Onde de choc à la frappe,
-  Feu, Pluie, Balayage, Tourbillon, Disco, Dégradé bicolore, **Jauge système**
+  Feu, Pluie, Balayage, Tourbillon, Disco, Dégradé bicolore, **Vague de
+  couleurs** (palette de 2 à 6 couleurs au choix, ou toute prête), **Jauge système**
   (F1-F12 = processeur, rangée des chiffres = mémoire vive), **Visualiseur
   audio** (le son joué par Windows anime le clavier, une colonne par bande de
   fréquence), **Ambiance écran** (le clavier reprend les couleurs de l'écran
@@ -87,7 +88,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   clics/mouvements/molette souris (positions absolues valables sur tous les
   écrans), **boucles imbriquées sur plusieurs niveaux**, exécution d'une autre
   macro (les appels en cycle sont refusés), **Ouvrir** un programme, un fichier
-  ou un lien, **Attendre une touche** (avec délai maximum facultatif).
+  ou un lien, **Attendre une touche** (avec délai maximum facultatif),
+  **Charger un profil**, **Effet clavier** (avec couleur facultative).
 - **Liste** : recherche par nom ou raccourci ; une macro s'exporte seule en
   fichier `.satella` à partager ; une suppression s'annule depuis la
   notification.
@@ -117,7 +119,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 - **Flash du clavier** (option) au démarrage et à l'arrêt des macros et turbos.
 
 ### Profils (page Profils)
-Un profil = éclairage complet + toutes les macros. Le profil **actif** suit les
+Un profil = éclairage complet + toutes les macros (« Dupliquer » en crée une
+copie de départ). Le profil **actif** suit les
 modifications : chaque changement d'éclairage ou de macro y est enregistré
 automatiquement. Bascule automatique : un profil peut être lié à des
 applications (application au premier plan) ou **programmé** sur une plage
@@ -140,9 +143,9 @@ sont gardées qu'avec ton accord.
   actions (LED, luminosité, minuteur, sauvegarde...).
 - **Apparence** : thème sombre, clair ou comme Windows (les aperçus du
   matériel restent sombres).
-- **Zone de notification** : clic pour ouvrir ; menu avec choix du profil,
-  extinction des LED, activation des macros et installation d'une mise à jour
-  prête.
+- **Zone de notification** : clic pour ouvrir ; menu avec choix du profil et
+  de l'effet du clavier, minuteur, extinction des LED, activation des macros et
+  installation d'une mise à jour prête.
 - **Raccourcis de l'application** (Paramètres) : éteindre / rallumer les LED,
   profil suivant, luminosité + / −, tout arrêter, minuteur, palette ; actifs dans
   toutes les applications, même macros coupées. Les conflits avec une macro
@@ -150,10 +153,10 @@ sont gardées qu'avec ton accord.
 - **Sauvegardes automatiques** : chaque jour où quelque chose a changé,
   copie complète dans `satella-data/sauvegardes/` (10 dernières gardées),
   restaurable depuis les Paramètres.
-- **Statistiques de frappe** (option) : nombre d'appuis par touche et par
-  jour, gardé sur ce PC et remis à zéro en un clic ; graphiques des 30
-  derniers jours et des touches les plus utilisées ; les frappes des macros
-  et turbos ne comptent pas.
+- **Statistiques de frappe** (option) : nombre d'appuis par touche, par jour
+  et par heure, gardé sur ce PC et remis à zéro en un clic ; graphiques des
+  30 derniers jours, des heures de frappe et des touches les plus utilisées ;
+  les frappes des macros et turbos ne comptent pas.
 - **Optimiseur mémoire** (principe MemReduct), avec nettoyage automatique au
   plus toutes les 10 minutes, qui épargne l'application au premier plan.
 - **Dépannage** (page Paramètres) : rapport de diagnostic copiable, accès aux

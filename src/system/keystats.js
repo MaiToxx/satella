@@ -17,4 +17,11 @@ function countKeyDay(days, date = new Date()) {
   return days;
 }
 
-module.exports = { countKeyDay, localDay, DAYS_KEPT };
+// Répartition par heure de la journée (24 compteurs, heure locale)
+function countKeyHour(hours, date = new Date()) {
+  const out = Array.isArray(hours) && hours.length === 24 ? hours : new Array(24).fill(0);
+  out[date.getHours()] = (out[date.getHours()] || 0) + 1;
+  return out;
+}
+
+module.exports = { countKeyDay, countKeyHour, localDay, DAYS_KEPT };

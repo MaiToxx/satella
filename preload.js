@@ -134,6 +134,7 @@ contextBridge.exposeInMainWorld('satella', {
     rename: (oldName, newName) => ipcRenderer.invoke('profiles:rename', oldName, newName),
     remove: (name) => ipcRenderer.invoke('profiles:remove', name),
     restore: (profile) => ipcRenderer.invoke('profiles:restore', profile),
+    duplicate: (name) => ipcRenderer.invoke('profiles:duplicate', name),
     setMeta: (name, meta) => ipcRenderer.invoke('profiles:setMeta', name, meta),
     onAutoApplied: on('profiles:autoApplied'),
     onChanged: on('profiles:changed'),

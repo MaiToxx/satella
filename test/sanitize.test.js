@@ -145,3 +145,21 @@ test('export / import d’une macro seule', () => {
   assert.deepEqual(res.macro.steps.map((s) => s.type), ['keyTap']);
   assert.throws(() => parseImport(JSON.stringify({ format: 'satella', version: 1, kind: 'macro', macro: 'x' }), KEYS), /macro invalide/);
 });
+
+test('import : étapes « Charger un profil » / « Effet clavier » et palette de la vague validées', () => {
+  const doc = { format: 'satella', version: 1, kind: 'profile', profile: { name: 'P',
+    ledState: { keyboard: { effect: 'palette', palette: ['#FF0000', 'rouge', '#00ff00', '#0000ff'] } },
+    macros: [{ id: 'm', steps: [
+      { type: 'profile', name: '  Jeu  ' }, { type: 'profile', name: '' },
+      { type: 'effect', effect: 'fire', color: '#00FF00' }, { type: 'effect', effect: 'inventé' },
+    ] }] } };
+  const { profile } = parseImport(JSON.stringify(doc), KEYS);
+  assert.deepEqual(profile.macros[0].steps, [
+    { type: 'profile', gapMs: 15, name: 'Jeu' },
+    { type: 'effect', gapMs: 15, effect: 'fire', color: '#00ff00' },
+  ]);
+  assert.equal(profile.ledState.keyboard.effect, 'palette');
+  assert.deepEqual(profile.ledState.keyboard.palette, ['#ff0000', '#00ff00', '#0000ff']);
+  const one = parseImport(JSON.stringify({ ...doc, profile: { name: 'Q', ledState: { keyboard: { palette: ['#123456'] } } } }), KEYS);
+  assert.equal(one.profile.ledState.keyboard.palette.length, 3, 'palette par défaut si moins de 2 couleurs');
+});

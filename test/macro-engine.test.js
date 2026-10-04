@@ -175,3 +175,27 @@ test('étape « Texte » : variables remplacées, curseur replacé', async () =>
   assert.ok(injector.log.includes('lines "(XY)"'), injector.log.join('|'));
   assert.equal(injector.log.filter((l) => l === 'tap left').length, 1);
 });
+
+test('étapes « Charger un profil » et « Effet clavier » : sans frappe, via les actions', async () => {
+  const calls = [];
+  const injector = { ...fakeInput(), available: false };
+  const engine = new MacroEngine({
+    globalShortcut: fakeShortcuts(),
+    injector,
+    actions: {
+      loadProfile: (name) => { calls.push(['profil', name]); return name === 'Jeu'; },
+      setEffect: (fx, color) => calls.push(['effet', fx, color]),
+    },
+  });
+  const errors = [];
+  engine.on('play-error', (e) => errors.push(e.message));
+  engine.setMacros([
+    { id: 'a', enabled: true, steps: [{ type: 'effect', effect: 'fire', color: '#ff0000', gapMs: 0 }, { type: 'profile', name: 'Jeu', gapMs: 0 }] },
+    { id: 'b', enabled: true, steps: [{ type: 'profile', name: 'Inconnu', gapMs: 0 }] },
+  ]);
+  await engine.play('a');
+  assert.deepEqual(calls, [['effet', 'fire', '#ff0000'], ['profil', 'Jeu']]);
+  assert.deepEqual(errors, [], 'aucune injection nécessaire');
+  await engine.play('b');
+  assert.match(errors[0], /profil « Inconnu » introuvable/);
+});

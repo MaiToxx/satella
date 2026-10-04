@@ -682,3 +682,15 @@ kbd {
 }
 .toast-action:hover { text-decoration: underline; }
 #macro-search { width: 220px; }
+
+/* Éditeur de palette (vague de couleurs) */
+.palette-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 230px; }
+.pal-chip { position: relative; display: inline-flex; }
+.pal-chip input[type="color"] { width: 34px; height: 28px; }
+.pal-del {
+  position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; border-radius: 50%;
+  border: 1px solid var(--line2); background: var(--deck2); color: var(--muted);
+  font-size: 11px; line-height: 13px; padding: 0; cursor: pointer;
+}
+.pal-del:hover { color: var(--danger); border-color: var(--danger); }
+#pal-preset { font-size: 12px; padding: 4px 6px; }

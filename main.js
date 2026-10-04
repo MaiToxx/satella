@@ -26,7 +26,7 @@ const memory = require('./src/system/memory');
 const foreground = require('./src/system/foreground');
 const idle = require('./src/system/idle');
 const locks = require('./src/system/locks');
-const { countKeyDay } = require('./src/system/keystats');
+const { countKeyDay, countKeyHour } = require('./src/system/keystats');
 const { MacroEngine, hookAvailable } = require('./src/macros/engine');
 const { SnippetEngine } = require('./src/macros/snippets');
 const input = require('./src/macros/input');
@@ -281,7 +281,23 @@ function setupEngines() {
   ledEngine = new LedEngine();
   direct = new DirectBackend();
   const clipboardRead = () => clipboard.readText();
-  macroEngine = new MacroEngine({ globalShortcut, opener: openTargetSafely, clipboardRead });
+  macroEngine = new MacroEngine({
+    globalShortcut,
+    opener: openTargetSafely,
+    clipboardRead,
+    // Étapes « Charger un profil » et « Effet clavier »
+    actions: {
+      loadProfile: (name) => {
+        const res = loadProfileByName(name);
+        if (res) send('profiles:autoApplied', { name, exe: null, manual: true, ...res });
+        return !!res;
+      },
+      setEffect: (effect, color) => {
+        ledEngine.setDeviceState('keyboard', color ? { effect, baseColor: color } : { effect });
+        send('led:state', ledEngine.state);
+      },
+    },
+  });
   snippetEngine = new SnippetEngine({ clipboardRead });
   turbos = store.read('turbos', []);
 
@@ -324,8 +340,13 @@ function setupEngines() {
     if (previewVisible()) win.webContents.send('led:frame', frame);
     if (streamingKeyboard()) direct.streamKeyboard(frame.keyboard);
   });
+  let trayEffect = null;
   ledEngine.on('state', (state) => {
     store.writeLater('led-state', state, 400);
+    if (state.keyboard.effect !== trayEffect) {
+      trayEffect = state.keyboard.effect;
+      rebuildTrayMenu(); // coche de l'effet dans la zone de notification
+    }
     if (settings.ledsEnabled && !isDimmed()) {
       direct.applyKeyboard(hwState('keyboard'));
       direct.applyMouse(hwState('mouse'));
@@ -366,6 +387,7 @@ function setupEngines() {
       keyStats.total++;
       if (!keyStats.since) keyStats.since = new Date().toISOString();
       countKeyDay(keyStats.days);
+      keyStats.hours = countKeyHour(keyStats.hours);
       store.writeLater('key-stats', keyStats, 5000);
     }
     // Expansion de texte : uniquement la frappe naturelle de l'utilisateur
@@ -1744,6 +1766,27 @@ function setupIpc() {
     lastAutoTarget = null;
     return profilesPayload();
   });
+  // Copie d'un profil (sans applications liées ni horaire, pour ne pas
+  // concurrencer l'original dans la bascule automatique)
+  ipcMain.handle('profiles:duplicate', (e, name) => {
+    if (profileSyncTimer) syncActiveProfile();
+    const profiles = store.read('profiles', []);
+    const src = profiles.find((p) => p.name === name);
+    if (!src) return { ok: false, ...profilesPayload() };
+    const copy = {
+      ...JSON.parse(JSON.stringify(src)),
+      name: uniqueProfileName(profiles, `${src.name} (copie)`.slice(0, 60)),
+      savedAt: new Date().toISOString(),
+      apps: [],
+      isDefault: false,
+      schedule: null,
+    };
+    profiles.push(copy);
+    store.write('profiles', profiles);
+    rebuildTrayMenu();
+    return { ok: true, name: copy.name, ...profilesPayload() };
+  });
+
   // Annulation d'une suppression : le profil revient (validé comme un import)
   ipcMain.handle('profiles:restore', (e, raw) => {
     const p = sanitize.profile(raw, KEY_NAMES);
@@ -1797,6 +1840,15 @@ function setupIpc() {
 
 // ------------------------------------------------ Zone de notification --
 
+// Effets proposés dans la zone de notification
+const TRAY_EFFECTS = [
+  ['static', 'Statique'], ['breathing', 'Respiration'], ['wave', 'Vague'], ['rainbow', 'Arc-en-ciel'],
+  ['reactive', 'Réactif'], ['ripple', 'Onde de choc'], ['sparkle', 'Étincelles'], ['fire', 'Feu'],
+  ['rain', 'Pluie'], ['scanner', 'Balayage'], ['spiral', 'Tourbillon'], ['disco', 'Disco'],
+  ['gradient', 'Dégradé'], ['palette', 'Vague de couleurs'], ['sysmon', 'Jauge système'],
+  ['audio', 'Visualiseur audio'], ['screen', 'Ambiance écran'], ['heatmap', 'Carte de chaleur'], ['off', 'Éteint'],
+];
+
 function rebuildTrayMenu() {
   if (!tray) return;
   const profiles = store.read('profiles', []);
@@ -1818,6 +1870,19 @@ function rebuildTrayMenu() {
           },
         }))
         : [{ label: 'Aucun profil', enabled: false }],
+    },
+    {
+      label: 'Effet du clavier',
+      enabled: settings.ledsEnabled,
+      submenu: TRAY_EFFECTS.map(([effect, label]) => ({
+        label,
+        type: 'radio',
+        checked: ledEngine.state.keyboard.effect === effect,
+        click: () => {
+          ledEngine.setDeviceState('keyboard', { effect });
+          send('led:state', ledEngine.state);
+        },
+      })),
     },
     {
       label: 'Éteindre les LED',

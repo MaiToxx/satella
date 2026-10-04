@@ -47,6 +47,7 @@ const EFFECTS = [
   ['audio', 'Visualiseur audio'],
   ['screen', 'Ambiance écran'],
   ['heatmap', 'Carte de chaleur'],
+  ['palette', 'Vague de couleurs'],
   ['off', 'Éteint'],
 ];
 const MOUSE_EFFECTS = [
@@ -62,8 +63,19 @@ const EFFECT_HINTS = {
   audio: 'Le son joué par Windows anime le clavier : une colonne par bande de fréquence. La couleur 2 colore le haut des colonnes.',
   screen: 'Le clavier reprend les couleurs de l\'écran principal, zone par zone (films, jeux). La vitesse règle la réactivité.',
   heatmap: 'Chaque touche prend la couleur de son usage : bleu = rarement, rouge = très souvent. Seul le nombre d\'appuis par touche est compté, sur ce PC.',
+  palette: 'Tes couleurs défilent sur le clavier dans la direction choisie. Choisis de 2 à 6 couleurs, ou une palette toute prête.',
 };
 const COLOR2_EFFECTS = ['gradient', 'audio'];
+
+// Vague de couleurs : palettes toutes prêtes (2 à 6 couleurs)
+const PALETTE_PRESETS = [
+  ['Coucher de soleil', ['#ff2a6d', '#ff9f1c', '#ffe066']],
+  ['Océan', ['#003cff', '#00c2ff', '#00ffd0']],
+  ['Forêt', ['#0b6b2e', '#3ddc84', '#c6ff3d']],
+  ['Néon', ['#ff00d4', '#7047ff', '#00e5ff']],
+  ['Braise', ['#ff0000', '#ff6a00', '#ffd000']],
+  ['Arc-en-ciel', ['#ff0033', '#ffd500', '#2ee88a', '#00a8ff', '#7047ff']],
+];
 
 const SWATCH_COLORS = [
   '#ff0033', '#ff7a00', '#ffd500', '#2ee88a', '#00a8ff',
@@ -141,6 +153,8 @@ const ICON_PATHS = {
   grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>',
   warn: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
   open: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  profile: '<path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15l2 2 3-4"/>',
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/>',
 };
 function svg(name, cls = 'icon sm') {
   return `<svg class="${cls}" viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`;
@@ -681,7 +695,10 @@ function syncToolbars() {
   const fx = STATE.keyboard.effect;
   $$('#kb-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === fx));
   $$('#mouse-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === STATE.mouse.effect));
-  $('#kb-dir-group').style.display = fx === 'wave' ? '' : 'none';
+  $('#kb-dir-group').style.display = fx === 'wave' || fx === 'palette' ? '' : 'none';
+  $('#kb-pal-label').style.display = fx === 'palette' ? '' : 'none';
+  $('#kb-palette').style.display = fx === 'palette' ? '' : 'none';
+  if (fx === 'palette') renderPaletteEditor();
   const showC2 = COLOR2_EFFECTS.includes(fx) ? '' : 'none';
   $('#kb-color2-label').style.display = showC2;
   $('#kb-color2').style.display = showC2;
@@ -715,6 +732,50 @@ function syncToolbars() {
   }
   refreshOverlayMarks();
   setAccent();
+}
+
+// Éditeur de la palette (vague de couleurs)
+function setPalette(list) {
+  STATE.keyboard.palette = list;
+  window.satella.led.set('keyboard', { palette: list });
+}
+
+function renderPaletteEditor() {
+  const box = $('#kb-palette');
+  if (box.contains(document.activeElement) && document.activeElement.type === 'color') return; // choix en cours
+  const pal = Array.isArray(STATE.keyboard.palette) && STATE.keyboard.palette.length >= 2
+    ? STATE.keyboard.palette : PALETTE_PRESETS[0][1];
+  box.innerHTML = pal.map((c, i) => `
+    <span class="pal-chip">
+      <input type="color" value="${esc(c)}" data-i="${i}" title="Couleur ${i + 1}">
+      ${pal.length > 2 ? `<button class="pal-del" data-i="${i}" title="Retirer cette couleur">×</button>` : ''}
+    </span>`).join('')
+    + (pal.length < 6 ? '<button class="btn small" id="pal-add" title="Ajouter une couleur">+</button>' : '')
+    + `<select id="pal-preset" title="Palettes toutes prêtes"><option value="">Palette…</option>
+        ${PALETTE_PRESETS.map(([name], i) => `<option value="${i}">${esc(name)}</option>`).join('')}</select>`;
+  box.querySelectorAll('input[type="color"]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const next = [...pal];
+      next[+input.dataset.i] = input.value;
+      setPalette(next);
+    });
+  });
+  box.querySelectorAll('.pal-del').forEach((b) => b.addEventListener('click', () => {
+    setPalette(pal.filter((_, i) => i !== +b.dataset.i));
+    renderPaletteEditor();
+  }));
+  const add = $('#pal-add');
+  if (add) {
+    add.addEventListener('click', () => {
+      setPalette([...pal, pal[pal.length - 1]]);
+      renderPaletteEditor();
+    });
+  }
+  $('#pal-preset').addEventListener('change', (e) => {
+    if (e.target.value === '') return;
+    setPalette([...PALETTE_PRESETS[+e.target.value][1]]);
+    renderPaletteEditor();
+  });
 }
 
 /* ================= Souris (SVG) ================= */
@@ -990,7 +1051,10 @@ const STEP_META = {
   runMacro: { icon: 'play', name: 'Exécuter macro' },
   open: { icon: 'open', name: 'Ouvrir' },
   waitKey: { icon: 'keyDown', name: 'Attendre touche' },
+  profile: { icon: 'profile', name: 'Charger un profil' },
+  effect: { icon: 'bulb', name: 'Effet clavier' },
 };
+let PROFILE_NAMES = []; // pour l'étape « Charger un profil »
 
 // Cible d'une étape « Ouvrir » (même règle que le processus principal) :
 // lien web ou courriel, ou chemin Windows absolu
@@ -1029,6 +1093,11 @@ function stepDesc(s) {
     }
     case 'open': return s.target || '';
     case 'waitKey': return `Attendre ${keyLabel(s.key)}${s.timeoutMs ? ` (${s.timeoutMs / 1000} s max)` : ''}`;
+    case 'profile': return `Profil « ${s.name} »`;
+    case 'effect': {
+      const fx = EFFECTS.find(([id]) => id === s.effect);
+      return `${fx ? fx[1] : s.effect}${s.color ? ` (${s.color})` : ''}`;
+    }
     default: return s.type;
   }
 }
@@ -1593,6 +1662,19 @@ function openStepModal(type, editPath = null, addPath = []) {
         <p class="muted" style="grid-column:1/3;font-size:11.5px">La macro s'arrête là jusqu'à ce que tu appuies sur
           cette touche (0 = sans limite) ; passé le délai, elle continue.</p>`;
       break;
+    case 'profile':
+      fields = `<label>Profil</label>
+        <input type="text" id="sf-profile" list="sf-profiles" maxlength="60" value="${esc(s.name || PROFILE_NAMES[0] || '')}">
+        <datalist id="sf-profiles">${PROFILE_NAMES.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+        <p class="muted" style="grid-column:1/3;font-size:11.5px">Charge l'éclairage et les macros du profil, comme
+          le bouton « Charger » de la page Profils.</p>`;
+      break;
+    case 'effect':
+      fields = `<label>Effet du clavier</label>
+        <select id="sf-effect">${EFFECTS.map(([id, label]) => `<option value="${id}" ${s.effect === id ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+        <label class="check"><input type="checkbox" id="sf-color-on" ${s.color ? 'checked' : ''}> Changer aussi la couleur</label>
+        <input type="color" id="sf-color" value="${esc(s.color || STATE.keyboard.baseColor || '#00a8ff')}">`;
+      break;
     case 'runMacro':
       fields = macroOptions
         ? `<label>Macro à exécuter</label><select id="sf-macro">${macroOptions}</select>`
@@ -1659,6 +1741,14 @@ function openStepModal(type, editPath = null, addPath = []) {
       case 'runMacro':
         if (!$('#sf-macro')) { backdrop.hidden = true; return; }
         out.macroId = $('#sf-macro').value;
+        break;
+      case 'profile':
+        out.name = $('#sf-profile').value.trim();
+        if (!out.name) return toast('Indique le nom du profil à charger.');
+        break;
+      case 'effect':
+        out.effect = $('#sf-effect').value;
+        if ($('#sf-color-on').checked) out.color = $('#sf-color').value;
         break;
     }
     pushHistory();
@@ -2044,6 +2134,7 @@ function setActiveProfile(name) {
 
 async function renderProfiles(payload) {
   const { profiles, active } = payload || await window.satella.profiles.list();
+  PROFILE_NAMES = profiles.map((p) => p.name);
   pendingProfiles = null;
   setActiveProfile(active);
   const p = $('#profile-list');
@@ -2058,6 +2149,7 @@ async function renderProfiles(payload) {
         <button class="btn small p-load">Charger</button>
         <button class="btn small p-default">${pr.isDefault ? 'Retirer le défaut' : 'Par défaut'}</button>
         <button class="btn small p-rename">Renommer</button>
+        <button class="btn small p-dup">Dupliquer</button>
         <button class="btn small p-export">Exporter</button>
         <button class="btn small danger p-del">Supprimer</button>
       </div>
@@ -2112,6 +2204,11 @@ async function renderProfiles(payload) {
     if (!res.ok) toast('Renommage impossible : ' + res.error, 4000);
     renderProfiles(res);
   }));
+  $$('.p-dup').forEach((b) => b.addEventListener('click', async (e) => {
+    const res = await window.satella.profiles.duplicate(rowName(e));
+    renderProfiles(res);
+    if (res.ok) toast(`Copie créée : « ${res.name} ».`);
+  }));
   $$('.p-export').forEach((b) => b.addEventListener('click', async (e) => {
     const res = await window.satella.data.exportProfile(rowName(e));
     if (res.ok) toast('Profil exporté : ' + res.file, 4000);
@@ -2145,6 +2242,7 @@ async function loadProfile(name) {
 // est en train de saisir sur la page Profils
 function onProfilesChanged(payload) {
   setActiveProfile(payload.active);
+  PROFILE_NAMES = (payload.profiles || []).map((p) => p.name);
   const editing = currentPage === 'profiles' && document.activeElement
     && document.activeElement.closest && document.activeElement.closest('#profile-list');
   if (currentPage === 'profiles' && !editing) renderProfiles(payload);
@@ -2556,8 +2654,9 @@ function columnPath(x, y, w, h) {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
-function statsDaysSvg(series) {
-  const W = 660, H = 190, L = 46, R = 8, T = 20, B = 24;
+// Colonnes d'une seule série ; `showLabel(i)` : graduations de l'axe X
+function statsColumnsSvg(series, { aria, showLabel, labelOf = (d) => d.short, H = 190 }) {
+  const W = 660, L = 46, R = 8, T = 20, B = 24;
   const pw = W - L - R, ph = H - T - B;
   const max = Math.max(0, ...series.map((d) => d.n));
   const top = niceCeil(max);
@@ -2565,7 +2664,7 @@ function statsDaysSvg(series) {
   const bw = Math.min(24, band - 2);
   const y = (v) => T + ph - (v / top) * ph;
   const recordIdx = max > 0 ? series.findIndex((d) => d.n === max) : -1;
-  let out = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Frappes par jour sur les 30 derniers jours">`;
+  let out = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(aria)}">`;
   for (const t of [0, top / 2, top]) {
     out += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/>`
       + `<text class="tick" x="${L - 6}" y="${y(t) + 3.5}" text-anchor="end">${nf.format(t)}</text>`;
@@ -2574,8 +2673,8 @@ function statsDaysSvg(series) {
     const x = L + i * band + (band - bw) / 2;
     if (d.n > 0) out += `<path class="col" d="${columnPath(x, y(d.n), bw, T + ph - y(d.n))}"/>`;
     if (i === recordIdx) out += `<text class="val" x="${x + bw / 2}" y="${y(d.n) - 5}" text-anchor="middle">${nf.format(d.n)}</text>`;
-    if (i % 7 === 2 || i === series.length - 1) {
-      out += `<text class="tick" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${esc(i === series.length - 1 ? 'auj.' : d.short)}</text>`;
+    if (showLabel(i)) {
+      out += `<text class="tick" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${esc(labelOf(d, i))}</text>`;
     }
     out += `<rect class="hit" x="${L + i * band}" y="${T}" width="${band}" height="${ph}" tabindex="0"
       data-tip="${esc(`${nf.format(d.n)} frappe${d.n > 1 ? 's' : ''}|${d.long}`)}"/>`;
@@ -2596,6 +2695,8 @@ async function openStatsModal() {
       long: d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }),
     });
   }
+  const hourCounts = Array.isArray(st.hours) && st.hours.length === 24 ? st.hours : new Array(24).fill(0);
+  const hours = hourCounts.map((n, h) => ({ n: n || 0, short: `${h} h`, long: `de ${h} h à ${h + 1} h` }));
   const active = series.filter((d) => d.n > 0);
   const best = active.reduce((a, d) => (d.n > (a ? a.n : 0) ? d : a), null);
   const tiles = [
@@ -2615,12 +2716,23 @@ async function openStatsModal() {
       <div class="stat-tile"><div class="st-label">${esc(label)}</div><div class="st-value">${esc(value)}</div>${sub ? `<div class="st-sub">${esc(sub)}</div>` : ''}</div>`).join('')}
     </div>
     <h4 class="stats-h">Frappes par jour, 30 derniers jours</h4>
-    <div class="chart-wrap" style="--chart:${chartColor()}">${statsDaysSvg(series)}<div class="chart-tip" hidden></div></div>
+    <div class="chart-wrap" style="--chart:${chartColor()}">${statsColumnsSvg(series, {
+    aria: 'Frappes par jour sur les 30 derniers jours',
+    showLabel: (i) => i % 7 === 2 || i === series.length - 1,
+    labelOf: (d, i) => (i === series.length - 1 ? 'auj.' : d.short),
+  })}<div class="chart-tip" hidden></div></div>
     <details class="stats-table"><summary>Voir le tableau</summary>
       <table><thead><tr><th>Jour</th><th>Frappes</th></tr></thead><tbody>
         ${series.slice().reverse().map((d) => `<tr><td>${esc(d.long)}</td><td>${nf.format(d.n)}</td></tr>`).join('')}
       </tbody></table>
     </details>
+    <h4 class="stats-h">Heures de frappe (depuis le début du comptage)</h4>
+    <div class="chart-wrap" style="--chart:${chartColor()}">${statsColumnsSvg(hours, {
+    aria: 'Frappes selon l\'heure de la journée',
+    showLabel: (i) => i % 3 === 0,
+    labelOf: (d, i) => `${i} h`,
+    H: 150,
+  })}<div class="chart-tip" hidden></div></div>
     <h4 class="stats-h">Touches les plus utilisées</h4>
     <div class="hbars" style="--chart:${chartColor()}">${top.length ? top.map(([k, n]) => `
       <div class="hb-row"><span class="hb-label">${esc(keyLabel(k))}</span>
@@ -2633,8 +2745,13 @@ async function openStatsModal() {
   $('#stats-close').addEventListener('click', cleanup);
   backdrop.addEventListener('modal-dismiss', () => modal.classList.remove('wide'), { once: true });
 
-  // Bulle d'aide : jour et valeur de la colonne survolée (ou sélectionnée au clavier)
-  const wrap = modal.querySelector('.chart-wrap');
+  // Bulle d'aide : jour (ou heure) et valeur de la colonne survolée ou
+  // sélectionnée au clavier
+  modal.querySelectorAll('.chart-wrap').forEach((wrap) => setupChartTips(wrap));
+  backdrop.hidden = false;
+}
+
+function setupChartTips(wrap) {
   const tip = wrap.querySelector('.chart-tip');
   const show = (el) => {
     const [value, label] = el.dataset.tip.split('|');
@@ -2658,7 +2775,6 @@ async function openStatsModal() {
     el.addEventListener('blur', hide);
   });
   wrap.addEventListener('pointerleave', hide);
-  backdrop.hidden = false;
 }
 $('#set-stats-open').addEventListener('click', openStatsModal);
 
