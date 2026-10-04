@@ -190,3 +190,14 @@ test('vague de couleurs : les couleurs de la palette défilent sur le clavier', 
   assert.notDeepEqual(b.esc, a.esc, 'la vague avance avec le temps');
   assert.equal(e.isAnimated('palette'), true);
 });
+
+test('vague de couleurs, mode respiration : tout le clavier de la même couleur, qui change', () => {
+  const e = engine();
+  e.setDeviceState('keyboard', { effect: 'palette', paletteMode: 'breathe', palette: ['#ff0000', '#0000ff'], brightness: 100 });
+  const a = e.computeKeyboard();
+  assert.deepEqual(a.esc, a.space);
+  assert.deepEqual(a.esc, [255, 0, 0]);
+  e.t = 1 / (0.2 + 0.5 * 2.3) / 0.25; // une couleur plus loin (vitesse 50)
+  const b = e.computeKeyboard();
+  assert.ok(b.esc[2] > 200 && b.esc[0] < 40, `couleur suivante : ${b.esc}`);
+});

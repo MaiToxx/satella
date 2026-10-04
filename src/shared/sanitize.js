@@ -67,6 +67,7 @@ function deviceState(v, effects) {
     // Vague de couleurs : 2 à 6 couleurs valides
     const pal = (Array.isArray(s.palette) ? s.palette : []).map((c) => hex(c)).filter(Boolean).slice(0, 6);
     out.palette = pal.length >= 2 ? pal : [...DEFAULT_PALETTE];
+    out.paletteMode = s.paletteMode === 'breathe' ? 'breathe' : 'wave';
   }
   return out;
 }
@@ -201,6 +202,7 @@ function profile(v, keyNames) {
     apps: (Array.isArray(v.apps) ? v.apps : []).map(appName).filter(Boolean).slice(0, 50),
     isDefault: bool(v.isDefault),
     schedule: schedule(v.schedule),
+    noSnippets: bool(v.noSnippets),
   };
 }
 
@@ -220,13 +222,27 @@ function turbo(v, keyNames) {
   const target = t.type === 'key' && keyNames.includes(t.key)
     ? { type: 'key', key: t.key }
     : { type: 'mouse', button: BUTTONS.includes(t.button) ? t.button : 'left' };
+  // Mode « tant que maintenu » : déclencheur = bouton de souris ou touche
+  const h = isObj(v.hold) ? v.hold : {};
+  const hold = h.type === 'key' && keyNames.includes(h.key)
+    ? { type: 'key', key: h.key }
+    : { type: 'mouse', button: BUTTONS.includes(h.button) ? h.button : 'x1' };
   return {
     id: id(v.id) || 'm_' + Math.random().toString(36).slice(2, 12),
     target,
     cps: int(v.cps, 1, 50, 10),
     accelerator: accelerator(v.accelerator),
     enabled: v.enabled !== false,
+    mode: v.mode === 'hold' ? 'hold' : 'toggle',
+    hold,
   };
+}
+
+// Le déclencheur d'un turbo maintenu est-il la cible elle-même ? (ses
+// propres clics le relâcheraient aussitôt)
+function turboHoldConflict(t) {
+  if (!t || t.mode !== 'hold' || !t.hold || !t.target || t.hold.type !== t.target.type) return false;
+  return t.hold.type === 'key' ? t.hold.key === t.target.key : t.hold.button === t.target.button;
 }
 
 function keymap(v) {
@@ -366,5 +382,5 @@ function stripOpenSteps(list) {
 
 module.exports = {
   parseImport, makeExport, ledState, macro, macros, profile, snippet, turbo, keymap, settingsPatch,
-  openTarget, openTargets, stripOpenSteps, schedule, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
+  openTarget, openTargets, stripOpenSteps, schedule, turboHoldConflict, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
 };

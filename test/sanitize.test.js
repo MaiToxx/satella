@@ -163,3 +163,25 @@ test('import : étapes « Charger un profil » / « Effet clavier » et palette 
   const one = parseImport(JSON.stringify({ ...doc, profile: { name: 'Q', ledState: { keyboard: { palette: ['#123456'] } } } }), KEYS);
   assert.equal(one.profile.ledState.keyboard.palette.length, 3, 'palette par défaut si moins de 2 couleurs');
 });
+
+test('turbo : mode « tant que maintenu » validé, conflit déclencheur = cible repéré', () => {
+  const { turbo, turboHoldConflict } = require('../src/shared/sanitize');
+  const t = turbo({ id: 't1', target: { type: 'mouse', button: 'left' }, mode: 'hold', hold: { type: 'mouse', button: 'x2' } }, KEYS);
+  assert.equal(t.mode, 'hold');
+  assert.deepEqual(t.hold, { type: 'mouse', button: 'x2' });
+  assert.equal(turboHoldConflict(t), false);
+  const legacy = turbo({ id: 't2', accelerator: 'F9' }, KEYS);
+  assert.equal(legacy.mode, 'toggle', 'anciens turbos : raccourci marche / arrêt');
+  assert.deepEqual(legacy.hold, { type: 'mouse', button: 'x1' });
+  const bad = turbo({ id: 't3', target: { type: 'mouse', button: 'right' }, mode: 'hold', hold: { type: 'mouse', button: 'right' } }, KEYS);
+  assert.equal(turboHoldConflict(bad), true);
+  const key = turbo({ id: 't4', target: { type: 'key', key: 'f8' }, mode: 'hold', hold: { type: 'key', key: 'f8' } }, KEYS);
+  assert.equal(turboHoldConflict(key), true);
+  assert.equal(turbo({ id: 't5', mode: 'hold', hold: { type: 'key', key: 'inventée' } }, KEYS).hold.type, 'mouse');
+});
+
+test('import : option « sans abréviations » d’un profil', () => {
+  const doc = (noSnippets) => JSON.stringify({ format: 'satella', version: 1, kind: 'profile', profile: { name: 'Jeu', noSnippets } });
+  assert.equal(parseImport(doc(true), KEYS).profile.noSnippets, true);
+  assert.equal(parseImport(doc('oui'), KEYS).profile.noSnippets, false);
+});

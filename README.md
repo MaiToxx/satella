@@ -55,7 +55,8 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
 - **Effets logiciels** (calculés par Satella et diffusés en continu via le mode
   « dynamique » du clavier, sans écriture en flash) : Onde de choc à la frappe,
   Feu, Pluie, Balayage, Tourbillon, Disco, Dégradé bicolore, **Vague de
-  couleurs** (palette de 2 à 6 couleurs au choix, ou toute prête), **Jauge système**
+  couleurs** (palette de 2 à 6 couleurs au choix, ou toute prête, en vague ou
+  en respiration), **Jauge système**
   (F1-F12 = processeur, rangée des chiffres = mémoire vive), **Visualiseur
   audio** (le son joué par Windows anime le clavier, une colonne par bande de
   fréquence), **Ambiance écran** (le clavier reprend les couleurs de l'écran
@@ -112,10 +113,12 @@ Satella ne tourne qu'en un seul exemplaire : relancer l'application
   les jeux (DirectInput, Raw Input).
 - **Expansion de texte** : une abréviation (`;mail`) se remplace par son texte
   dans n'importe quelle application, avec les mêmes variables que les étapes
-  « Texte ». Les caractères sont lus selon la disposition active (AZERTY,
+  « Texte ». Un profil peut la mettre en pause (option « Sans abréviations »,
+  pratique pour les jeux). Les caractères sont lus selon la disposition active (AZERTY,
   accents, AltGr, touches mortes).
-- **Mode turbo** : un raccourci démarre ou coupe la répétition d'un clic ou
-  d'une touche (1 à 50 par seconde).
+- **Mode turbo** : répétition d'un clic ou d'une touche (1 à 50 par seconde),
+  démarrée et coupée par un raccourci, ou **tant que** tu maintiens un bouton
+  de la souris (bouton latéral, molette...) ou une touche.
 - **Flash du clavier** (option) au démarrage et à l'arrêt des macros et turbos.
 
 ### Profils (page Profils)
@@ -140,7 +143,8 @@ sont gardées qu'avec ton accord.
 ### Système
 - **Palette de commandes** (Ctrl+K, ou un raccourci global qui affiche
   Satella) : recherche instantanée des pages, macros, profils, effets et
-  actions (LED, luminosité, minuteur, sauvegarde...).
+  actions (LED, luminosité, minuteur, sauvegarde...). **Ctrl+/** affiche
+  tous les raccourcis.
 - **Apparence** : thème sombre, clair ou comme Windows (les aperçus du
   matériel restent sombres).
 - **Zone de notification** : clic pour ouvrir ; menu avec choix du profil et

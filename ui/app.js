@@ -63,7 +63,7 @@ const EFFECT_HINTS = {
   audio: 'Le son joué par Windows anime le clavier : une colonne par bande de fréquence. La couleur 2 colore le haut des colonnes.',
   screen: 'Le clavier reprend les couleurs de l\'écran principal, zone par zone (films, jeux). La vitesse règle la réactivité.',
   heatmap: 'Chaque touche prend la couleur de son usage : bleu = rarement, rouge = très souvent. Seul le nombre d\'appuis par touche est compté, sur ce PC.',
-  palette: 'Tes couleurs défilent sur le clavier dans la direction choisie. Choisis de 2 à 6 couleurs, ou une palette toute prête.',
+  palette: 'Vague : tes couleurs défilent dans la direction choisie. Respiration : tout le clavier passe d\'une couleur à l\'autre. Choisis de 2 à 6 couleurs, ou une palette toute prête.',
 };
 const COLOR2_EFFECTS = ['gradient', 'audio'];
 
@@ -695,7 +695,7 @@ function syncToolbars() {
   const fx = STATE.keyboard.effect;
   $$('#kb-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === fx));
   $$('#mouse-effects button').forEach((b) => b.classList.toggle('active', b.dataset.fx === STATE.mouse.effect));
-  $('#kb-dir-group').style.display = fx === 'wave' || fx === 'palette' ? '' : 'none';
+  $('#kb-dir-group').style.display = fx === 'wave' || (fx === 'palette' && STATE.keyboard.paletteMode !== 'breathe') ? '' : 'none';
   $('#kb-pal-label').style.display = fx === 'palette' ? '' : 'none';
   $('#kb-palette').style.display = fx === 'palette' ? '' : 'none';
   if (fx === 'palette') renderPaletteEditor();
@@ -751,6 +751,9 @@ function renderPaletteEditor() {
       ${pal.length > 2 ? `<button class="pal-del" data-i="${i}" title="Retirer cette couleur">×</button>` : ''}
     </span>`).join('')
     + (pal.length < 6 ? '<button class="btn small" id="pal-add" title="Ajouter une couleur">+</button>' : '')
+    + `<select id="pal-mode" title="Animation">
+        <option value="wave" ${STATE.keyboard.paletteMode !== 'breathe' ? 'selected' : ''}>Vague</option>
+        <option value="breathe" ${STATE.keyboard.paletteMode === 'breathe' ? 'selected' : ''}>Respiration</option></select>`
     + `<select id="pal-preset" title="Palettes toutes prêtes"><option value="">Palette…</option>
         ${PALETTE_PRESETS.map(([name], i) => `<option value="${i}">${esc(name)}</option>`).join('')}</select>`;
   box.querySelectorAll('input[type="color"]').forEach((input) => {
@@ -771,6 +774,11 @@ function renderPaletteEditor() {
       renderPaletteEditor();
     });
   }
+  $('#pal-mode').addEventListener('change', (e) => {
+    STATE.keyboard.paletteMode = e.target.value;
+    window.satella.led.set('keyboard', { paletteMode: e.target.value });
+    syncToolbars();
+  });
   $('#pal-preset').addEventListener('change', (e) => {
     if (e.target.value === '') return;
     setPalette([...PALETTE_PRESETS[+e.target.value][1]]);
@@ -2135,6 +2143,7 @@ function setActiveProfile(name) {
 async function renderProfiles(payload) {
   const { profiles, active } = payload || await window.satella.profiles.list();
   PROFILE_NAMES = profiles.map((p) => p.name);
+  updateSnippetPause(profiles, active);
   pendingProfiles = null;
   setActiveProfile(active);
   const p = $('#profile-list');
@@ -2157,6 +2166,8 @@ async function renderProfiles(payload) {
         <input type="text" class="p-apps-input" placeholder="Applications liées : jeu.exe, autre.exe"
           value="${esc((pr.apps || []).join(', '))}">
         <button class="btn small p-apps-save">Lier</button>
+        <label class="check" title="Pratique pour les jeux : aucune abréviation ne se déclenche tant que ce profil est actif">
+          <input type="checkbox" class="p-nosnip" ${pr.noSnippets ? 'checked' : ''}> Sans abréviations</label>
       </div>
       <div class="p-sched">
         <label class="check"><input type="checkbox" class="p-sched-on" ${pr.schedule ? 'checked' : ''}> Actif chaque jour de</label>
@@ -2179,6 +2190,12 @@ async function renderProfiles(payload) {
     renderProfiles(await window.satella.profiles.setMeta(row.dataset.name, { apps }));
     toast('Applications liées au profil.');
   }));
+  $$('.p-nosnip').forEach((c) => c.addEventListener('change', async (e) => {
+    const name = rowName(e);
+    renderProfiles(await window.satella.profiles.setMeta(name, { noSnippets: e.target.checked }));
+    toast(e.target.checked ? `Abréviations en pause dans « ${name} ».` : `Abréviations actives dans « ${name} ».`);
+  }));
+
   // Profil programmé : plage horaire enregistrée à chaque modification
   $$('.p-sched').forEach((box) => {
     const save = async () => {
@@ -2227,6 +2244,14 @@ async function renderProfiles(payload) {
   }));
 }
 
+// Abréviations en pause dans le profil actif : rappel au-dessus de la liste
+function updateSnippetPause(profiles, active) {
+  const p = profiles.find((x) => x.name === active);
+  const el = $('#snippet-paused');
+  el.hidden = !(p && p.noSnippets);
+  if (p && p.noSnippets) el.textContent = `En pause : le profil actif « ${p.name} » désactive les abréviations.`;
+}
+
 async function loadProfile(name) {
   const res = await window.satella.profiles.load(name);
   if (!res) return;
@@ -2243,6 +2268,7 @@ async function loadProfile(name) {
 function onProfilesChanged(payload) {
   setActiveProfile(payload.active);
   PROFILE_NAMES = (payload.profiles || []).map((p) => p.name);
+  updateSnippetPause(payload.profiles || [], payload.active);
   const editing = currentPage === 'profiles' && document.activeElement
     && document.activeElement.closest && document.activeElement.closest('#profile-list');
   if (currentPage === 'profiles' && !editing) renderProfiles(payload);
@@ -2367,6 +2393,15 @@ function saveTurbos() {
   window.satella.turbos.set(clone(TURBOS));
 }
 
+// Déclencheurs d'un turbo « tant que maintenu »
+const TURBO_HOLD_BUTTONS = [
+  ['mouse:x1', 'Bouton latéral 1 (retour)'],
+  ['mouse:x2', 'Bouton latéral 2 (avance)'],
+  ['mouse:middle', 'Clic molette'],
+  ['mouse:right', 'Clic droit'],
+];
+const turboHoldValue = (t) => (t.hold && t.hold.type === 'key' ? `key:${t.hold.key}` : `mouse:${(t.hold && t.hold.button) || 'x1'}`);
+
 function turboTargetValue(t) {
   return t.target && t.target.type === 'key' ? 'key' : 'mouse:' + ((t.target && t.target.button) || 'left');
 }
@@ -2394,12 +2429,32 @@ function renderTurbos() {
       <label class="muted" style="font-size:12px">Cadence</label>
       <input type="range" class="tb-cps" min="1" max="50" value="${+t.cps || 10}" style="width:110px">
       <span class="muted tb-cps-val" style="font-family:var(--font-mono);font-size:12px">${+t.cps || 10}/s</span>
-      <input type="text" readonly class="trigger-input tb-accel" style="min-width:130px"
+      <select class="tb-mode" title="Comment le turbo démarre">
+        <option value="toggle" ${t.mode !== 'hold' ? 'selected' : ''}>Raccourci marche / arrêt</option>
+        <option value="hold" ${t.mode === 'hold' ? 'selected' : ''}>Tant que maintenu</option>
+      </select>
+      <input type="text" readonly class="trigger-input tb-accel" style="min-width:130px;display:${t.mode === 'hold' ? 'none' : ''}"
         value="${esc(t.accelerator || '')}" placeholder="Raccourci...">
+      <select class="tb-hold" style="display:${t.mode === 'hold' ? '' : 'none'}" title="Bouton ou touche à maintenir">
+        <optgroup label="Souris">${TURBO_HOLD_BUTTONS.map(([v, l]) => `<option value="${v}" ${turboHoldValue(t) === v ? 'selected' : ''}>${l}</option>`).join('')}</optgroup>
+        <optgroup label="Touche">${KEY_NAMES.map((k) => `<option value="key:${esc(k)}" ${turboHoldValue(t) === `key:${k}` ? 'selected' : ''}>${esc(keyLabel(k))}</option>`).join('')}</optgroup>
+      </select>
       <label class="switch"><input type="checkbox" class="tb-on" ${t.enabled ? 'checked' : ''}><span></span></label>
       <button class="icon-btn tb-del" title="Supprimer">${svg('close')}</button>
-      ${err ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} Raccourci inactif : ${esc(err.reason)}.</span>` : ''}`;
+      ${err ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} ${t.mode === 'hold' ? 'Turbo inactif' : 'Raccourci inactif'} : ${esc(err.reason)}.</span>` : ''}
+      ${t.mode === 'hold' && !CAPS.uiohook ? `<span class="warn-text" style="flex-basis:100%">${svg('warn')} Écoute globale indisponible sur ce système : le mode maintenu ne peut pas fonctionner.</span>` : ''}`;
 
+    row.querySelector('.tb-mode').addEventListener('change', (e) => {
+      TURBOS[i].mode = e.target.value;
+      if (!TURBOS[i].hold) TURBOS[i].hold = { type: 'mouse', button: 'x1' };
+      saveTurbos();
+      renderTurbos();
+    });
+    row.querySelector('.tb-hold').addEventListener('change', (e) => {
+      const [type, value] = e.target.value.split(':');
+      TURBOS[i].hold = type === 'key' ? { type: 'key', key: value } : { type: 'mouse', button: value };
+      saveTurbos();
+    });
     row.querySelector('.tb-target').addEventListener('change', (e) => {
       const v = e.target.value;
       TURBOS[i].target = v === 'key'
@@ -2441,7 +2496,7 @@ function renderTurbos() {
 $('#turbo-add').addEventListener('click', () => {
   TURBOS.push({
     id: uid(), target: { type: 'mouse', button: 'left' },
-    cps: 10, accelerator: '', enabled: true,
+    cps: 10, accelerator: '', enabled: true, mode: 'toggle', hold: { type: 'mouse', button: 'x1' },
   });
   saveTurbos();
   renderTurbos();
@@ -2785,6 +2840,7 @@ $('#set-stats-reset').addEventListener('click', async () => {
   toast('Statistiques remises à zéro.');
 });
 
+$('#keys-help').addEventListener('click', () => openShortcutsHelp());
 $('#set-theme').addEventListener('change', async (e) => {
   renderSettings(await window.satella.settings.set({ theme: e.target.value }));
 });
@@ -2951,6 +3007,7 @@ async function paletteCommands() {
   });
   add('Action', 'Vérifier les mises à jour', () => { showPage('home'); $('#update-check').click(); });
   add('Action', 'Copier le diagnostic', () => $('#diag-copy').click());
+  add('Aide', 'Raccourcis clavier de Satella', () => openShortcutsHelp(), 'Ctrl+/');
   return items;
 }
 
@@ -3017,7 +3074,53 @@ $('#palette-list').addEventListener('mousemove', (e) => {
   $$('#palette-list .pal-item').forEach((el, i) => el.classList.toggle('sel', i === paletteSel));
 });
 $('#palette-backdrop').addEventListener('mousedown', (e) => { if (e.target.id === 'palette-backdrop') closePalette(); });
+// Aide : tous les raccourcis de l'interface et ceux réglés dans Satella
+function openShortcutsHelp() {
+  if (!$('#modal-backdrop').hidden) return;
+  const section = (title, rows) => `<h4 class="stats-h">${esc(title)}</h4>
+    <table class="keys-table">${rows.map(([k, d]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(d)}</td></tr>`).join('')}</table>`;
+  const app = APP_SHORTCUTS.filter(([id]) => (SETTINGS.appShortcuts || {})[id])
+    .map(([id, label]) => [SETTINGS.appShortcuts[id], label]);
+  const macros = MACROS.filter((m) => m.enabled && m.trigger && m.trigger.accelerator)
+    .map((m) => [m.trigger.accelerator, `Macro « ${m.name} »`]);
+  const turbos = TURBOS.map((t, i) => [t, i]).filter(([t]) => t.enabled && t.mode !== 'hold' && t.accelerator)
+    .map(([t, i]) => [t.accelerator, `Turbo n°${i + 1}`]);
+  const modal = $('#modal');
+  modal.classList.add('wide');
+  modal.innerHTML = `
+    <h3>Raccourcis clavier</h3>
+    ${section('Partout dans Satella', [
+    ['Ctrl+K', 'Palette de commandes'],
+    ['Ctrl+/', 'Cette aide'],
+    ['Échap', 'Fermer une fenêtre ou la palette'],
+  ])}
+    ${section('Page Clavier', [
+    ['Clic', 'Sélectionner une touche'],
+    ['Glisser', 'Sélection rectangle'],
+    ['Ctrl+clic', 'Ajouter ou retirer une touche de la sélection'],
+    ['Ctrl+Z / Ctrl+Y', 'Annuler / rétablir la coloration'],
+  ])}
+    ${section('Page Macros', [
+    ['Ctrl+S', 'Sauvegarder la macro'],
+    ['Ctrl+Z / Ctrl+Y', 'Annuler / rétablir les étapes'],
+    ['Double-clic', 'Modifier une étape'],
+  ])}
+    ${app.length || macros.length || turbos.length
+    ? section('Raccourcis globaux (dans toutes les applications)', [...app, ...macros, ...turbos])
+    : '<p class="muted" style="font-size:12.5px">Aucun raccourci global réglé : voir Paramètres > Raccourcis de l\'application, et le déclencheur de chaque macro.</p>'}
+    <div class="btn-row" style="margin-top:16px"><button class="btn" id="keys-close">Fermer</button></div>`;
+  const backdrop = $('#modal-backdrop');
+  $('#keys-close').addEventListener('click', () => { modal.classList.remove('wide'); backdrop.hidden = true; });
+  backdrop.addEventListener('modal-dismiss', () => modal.classList.remove('wide'), { once: true });
+  backdrop.hidden = false;
+}
+
 document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.altKey && (e.key === '/' || e.code === 'Slash')) {
+    e.preventDefault();
+    openShortcutsHelp();
+    return;
+  }
   if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     if ($('#palette-backdrop').hidden) openPalette();
@@ -3144,7 +3247,8 @@ async function init() {
   window.satella.turbos.onState(({ id, running }) => {
     const row = document.querySelector(`.turbo-row[data-id="${CSS.escape(id)}"]`);
     if (row) row.querySelector('.turbo-dot').classList.toggle('on', running);
-    if (running) toast('Turbo activé. Le même raccourci l\'arrête.');
+    const t = TURBOS.find((x) => x.id === id);
+    if (running && !(t && t.mode === 'hold')) toast('Turbo activé. Le même raccourci l\'arrête.');
   });
   window.satella.profiles.onChanged(onProfilesChanged);
   window.satella.profiles.onAutoApplied((res) => {

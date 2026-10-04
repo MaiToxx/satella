@@ -334,6 +334,10 @@ class MacroEngine extends EventEmitter {
       uiohook.on('keydown', (e) => this.emit('key-activity', activity(e, true)));
       uiohook.on('keyup', (e) => this.emit('key-activity', activity(e, false)));
       uiohook.on('mousedown', () => this.emit('mouse-activity'));
+      // Boutons de souris (turbo « tant que maintenu »)
+      const BUTTON_NAMES = { 1: 'left', 2: 'right', 3: 'middle', 4: 'x1', 5: 'x2' };
+      uiohook.on('mousedown', (e) => this.emit('mouse-button', { button: BUTTON_NAMES[e.button], down: true }));
+      uiohook.on('mouseup', (e) => this.emit('mouse-button', { button: BUTTON_NAMES[e.button], down: false }));
       this._listenersAttached = true;
     }
     if (!this.hookStarted) {
