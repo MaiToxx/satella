@@ -192,6 +192,10 @@ function schedule(v) {
   return { from: v.from, to: v.to };
 }
 
+// Préréglage de performance (page Optimiseur) : '' = aucun
+const PERF_PRESETS = ['game', 'balanced', 'quiet'];
+const perfPreset = (v) => (PERF_PRESETS.includes(v) ? v : '');
+
 function profile(v, keyNames) {
   if (!isObj(v)) return null;
   const name = str(v.name, 60).trim();
@@ -206,6 +210,7 @@ function profile(v, keyNames) {
     isDefault: bool(v.isDefault),
     schedule: schedule(v.schedule),
     noSnippets: bool(v.noSnippets),
+    perf: perfPreset(v.perf),
   };
 }
 
@@ -266,7 +271,7 @@ const SETTING_TYPES = {
   flashOnMacro: 'boolean', keyStats: 'boolean', nightMode: 'boolean', nightFrom: 'string',
   nightTo: 'string', nightAction: 'string', nightLevel: 'number',
   lockIndicators: 'boolean', lockColor: 'string', timerMinutes: 'number', autoBackup: 'boolean',
-  appShortcuts: 'object', theme: 'string',
+  appShortcuts: 'object', theme: 'string', perfPreset: 'string',
 };
 
 // Raccourcis globaux de l'application (action -> accélérateur)
@@ -292,6 +297,8 @@ function settingsPatch(v) {
       if (c) out[k] = c;
     } else if (k === 'theme') {
       if (['dark', 'light', 'system'].includes(v[k])) out[k] = v[k];
+    } else if (k === 'perfPreset') {
+      if (perfPreset(v[k])) out[k] = v[k];
     } else if (k === 'appShortcuts') {
       if (isObj(v[k])) out[k] = appShortcuts(v[k]);
     }
@@ -385,5 +392,5 @@ function stripOpenSteps(list) {
 
 module.exports = {
   parseImport, makeExport, ledState, macro, macros, profile, snippet, turbo, keymap, settingsPatch,
-  openTarget, openTargets, stripOpenSteps, schedule, turboHoldConflict, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
+  openTarget, openTargets, stripOpenSteps, schedule, turboHoldConflict, perfPreset, KB_EFFECTS, MOUSE_EFFECTS, APP_SHORTCUT_ACTIONS,
 };

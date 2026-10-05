@@ -170,8 +170,28 @@ sont gardées qu'avec ton accord.
   et par heure, gardé sur ce PC et remis à zéro en un clic ; graphiques des
   30 derniers jours, des heures de frappe et des touches les plus utilisées ;
   les frappes des macros et turbos ne comptent pas.
-- **Optimiseur mémoire** (principe MemReduct), avec nettoyage automatique au
-  plus toutes les 10 minutes, qui épargne l'application au premier plan.
+- **Optimiseur** (onglets), uniquement avec les outils de Windows
+  (powercfg, registre, PowerShell), tout réversible :
+  - **Ce PC** : matériel détecté (modèle, processeur, puces graphiques,
+    mémoire, secteur / batterie), préréglages **Jeu**, **Équilibré** et
+    **Silencieux et frais** (mode d'alimentation + turbo du processeur) et
+    conseils adaptés (portable à deux puces graphiques, Ryzen / Radeon,
+    Dell…) ;
+  - **Alimentation** : mode d'alimentation de Windows, turbo du processeur
+    sur secteur et sur batterie, mode de gestion (dont « Performances
+    optimales ») ;
+  - **Jeux** : Mode Jeu, enregistrement Xbox (Game DVR), optimisations des
+    jeux en fenêtre (Windows 11), planification GPU accélérée, et **carte
+    graphique par application** (hautes performances / économie d'énergie) ;
+  - **Démarrage** : programmes lancés avec Windows, à activer ou désactiver
+    comme dans le gestionnaire des tâches ;
+  - **Mémoire** : libération (principe MemReduct), avec nettoyage
+    automatique au plus toutes les 10 minutes, qui épargne l'application au
+    premier plan ;
+  - **Nettoyage** : fichiers temporaires de plus de 24 heures.
+  Un profil peut appliquer un préréglage quand il devient actif (mode Jeu
+  quand le jeu lié passe au premier plan) ; préréglages aussi dans la palette
+  et la zone de notification.
 - **Dépannage** (page Paramètres) : rapport de diagnostic copiable, accès aux
   journaux et aux données.
 
@@ -242,6 +262,8 @@ src/shared/textvars.js        Variables du texte tapé ({date}, {curseur}...)
 src/system/locks.js           État Verr. Maj / Verr. Num (témoins)
 src/system/keystats.js        Frappes par jour (statistiques)
 src/system/memory.js          Optimiseur mémoire
+src/system/tuning.js          Réglages de performance de Windows (Optimiseur)
+src/system/power.js           Mode d'alimentation de Windows (powrprof)
 src/system/logger.js          Journal fichier
 ui/                           Interface (HTML/CSS/JS)
 test/                         Tests unitaires (node --test)

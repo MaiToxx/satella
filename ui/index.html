@@ -336,34 +336,189 @@
       <section class="page" id="page-optimizer">
         <div class="page-head">
           <div class="eyebrow">Système</div>
-          <h1>Optimiseur mémoire</h1>
-          <p class="hint">Libère la mémoire vive occupée par les processus inactifs et purge le cache
-            du système, sans redémarrer quoi que ce soit.</p>
+          <h1>Optimiseur</h1>
+          <p class="hint">Mémoire, alimentation, jeux, démarrage : les réglages de Windows qui comptent pour
+            les performances du PC, au même endroit. Tout est réversible.</p>
         </div>
-        <div class="panel" id="mem-panel">
-          <div class="mem-figure">
-            <div class="mem-value"><span id="mem-used">0</span><span class="mem-unit"> Go utilisés</span></div>
-            <div class="mem-sub"><span id="mem-total">0</span> Go au total · <span id="mem-free">0</span> Go libres</div>
-            <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
+        <div class="seg opt-tabs" id="opt-tabs" role="tablist">
+          <button data-tab="pc" class="active">Ce PC</button>
+          <button data-tab="power">Alimentation</button>
+          <button data-tab="games">Jeux</button>
+          <button data-tab="startup">Démarrage</button>
+          <button data-tab="memory">Mémoire</button>
+          <button data-tab="clean">Nettoyage</button>
+        </div>
+        <p class="muted opt-unavailable" id="opt-unavailable" hidden>Ces réglages ne sont disponibles que sous Windows.</p>
+        <p class="opt-error" id="opt-error" hidden></p>
+
+        <!-- Ce PC : matériel détecté, préréglages, conseils -->
+        <div class="opt-pane" data-pane="pc">
+          <div class="panel opt-hw" id="opt-hw"><p class="muted">Lecture des réglages de Windows…</p></div>
+          <h2>Préréglages</h2>
+          <div class="opt-presets" id="opt-presets">
+            <button class="opt-preset" data-preset="game">
+              <span class="opt-preset-name">Jeu</span>
+              <span class="opt-preset-desc">Meilleures performances, turbo du processeur au maximum.</span>
+            </button>
+            <button class="opt-preset" data-preset="balanced">
+              <span class="opt-preset-name">Équilibré</span>
+              <span class="opt-preset-desc">Le réglage habituel de Windows : performances quand il faut, économies le reste du temps.</span>
+            </button>
+            <button class="opt-preset" data-preset="quiet">
+              <span class="opt-preset-name">Silencieux et frais</span>
+              <span class="opt-preset-desc">Économie d'énergie, turbo coupé : moins de chaleur, de bruit, et plus d'autonomie.</span>
+            </button>
           </div>
-          <div class="btn-row" style="margin-top:20px">
-            <button class="btn primary" id="mem-optimize">Libérer la mémoire</button>
-            <span class="muted" id="mem-result"></span>
+          <p class="muted opt-note">Astuce : dans la page Profils, un profil lié à un jeu peut passer en « Jeu »
+            tout seul quand le jeu est au premier plan. En revenant à un profil sans préréglage (le profil par
+            défaut, par exemple), le préréglage habituel revient.</p>
+          <h2>Conseils pour ce PC</h2>
+          <div class="panel"><ul class="opt-tips" id="opt-tips"></ul></div>
+        </div>
+
+        <!-- Alimentation -->
+        <div class="opt-pane" data-pane="power" hidden>
+          <div class="panel">
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Mode d'alimentation de Windows</div>
+                <div class="setting-desc">Le même réglage que Paramètres &gt; Système &gt; Alimentation, pour la source
+                  actuelle (secteur ou batterie).</div>
+                <p class="opt-warn" id="opt-overlay-warn" hidden></p>
+              </div>
+              <div class="seg" id="opt-overlay">
+                <button data-v="efficiency">Économie</button>
+                <button data-v="balanced">Équilibré</button>
+                <button data-v="performance">Performances</button>
+              </div>
+            </div>
+            <div class="setting-row" id="opt-boost-row">
+              <div>
+                <div class="setting-name">Turbo du processeur</div>
+                <div class="setting-desc">Le turbo pousse la fréquence au-delà de la vitesse de base. Le couper rend un
+                  portable nettement plus frais et silencieux, au prix d'un peu de vitesse.</div>
+              </div>
+              <div class="opt-boost">
+                <label>Sur secteur <select id="opt-boost-ac"></select></label>
+                <label>Sur batterie <select id="opt-boost-dc"></select></label>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Mode de gestion de l'alimentation</div>
+                <div class="setting-desc">« Utilisation normale » convient presque toujours (le mode d'alimentation
+                  ci-dessus n'agit qu'avec lui). « Performances optimales » garde le processeur à pleine vitesse :
+                  à réserver au secteur.</div>
+              </div>
+              <div class="opt-plan">
+                <select id="opt-plan"></select>
+                <button class="btn small" id="opt-ultimate" hidden>Ajouter « Performances optimales »</button>
+              </div>
+            </div>
           </div>
         </div>
-        <h2>Nettoyage automatique</h2>
-        <div class="panel">
-          <label class="check"><input type="checkbox" id="mem-auto">
-            Libérer automatiquement la mémoire quand l'utilisation dépasse un seuil</label>
-          <div class="btn-row" style="margin-top:12px">
-            <label class="muted" style="font-size:13px">Seuil</label>
-            <input type="range" id="mem-threshold" min="50" max="95" value="80">
-            <span class="muted" id="mem-threshold-val" style="font-family:var(--font-mono)">80%</span>
+
+        <!-- Jeux -->
+        <div class="opt-pane" data-pane="games" hidden>
+          <div class="panel">
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Mode Jeu de Windows</div>
+                <div class="setting-desc">Pendant une partie, Windows donne la priorité au jeu et repousse les mises à
+                  jour et les notifications.</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="opt-gamemode"><span></span></label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Enregistrement Xbox (Game DVR)</div>
+                <div class="setting-desc">Captures et enregistrement de la Xbox Game Bar. Désactivé, le jeu récupère les
+                  ressources qu'il occupait en arrière-plan.</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="opt-dvr"><span></span></label>
+            </div>
+            <div class="setting-row" id="opt-windowed-row">
+              <div>
+                <div class="setting-name">Optimisations pour les jeux en fenêtre</div>
+                <div class="setting-desc">Windows 11 : moins de latence et l'affichage variable (VRR) pour les jeux en
+                  fenêtre ou en plein écran fenêtré.</div>
+              </div>
+              <label class="switch"><input type="checkbox" id="opt-windowed"><span></span></label>
+            </div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Planification GPU à accélération matérielle</div>
+                <div class="setting-desc">La carte graphique gère elle-même sa file d'attente : un peu moins de latence
+                  avec un pilote récent. Réglage commun à tout le PC (Windows demande une confirmation),
+                  pris en compte au prochain redémarrage.</div>
+                <p class="opt-warn" id="opt-hags-restart" hidden>Redémarre le PC pour appliquer ce changement.</p>
+              </div>
+              <label class="switch"><input type="checkbox" id="opt-hags"><span></span></label>
+            </div>
           </div>
-          <p class="muted" style="margin-top:10px;font-size:12.5px">
-            Vérification toutes les minutes, au plus un nettoyage toutes les 10 minutes.
-            L'application au premier plan (un jeu, par exemple) est épargnée pour ne pas la faire
-            saccader. La purge du cache système demande que Satella soit lancée en administrateur.</p>
+          <h2>Carte graphique par application</h2>
+          <div class="panel">
+            <p class="muted opt-note" id="opt-gpu-hint">Sur un portable à deux puces graphiques, choisis
+              « Hautes performances » pour tes jeux : ils tourneront sur la carte la plus puissante.</p>
+            <div class="opt-gpu-list" id="opt-gpu-list"></div>
+            <div class="btn-row" style="margin-top:12px">
+              <button class="btn" id="opt-gpu-add">Ajouter un jeu ou une application…</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Démarrage -->
+        <div class="opt-pane" data-pane="startup" hidden>
+          <p class="muted opt-note" id="opt-startup-sum"></p>
+          <div class="panel opt-startup" id="opt-startup"></div>
+          <p class="muted opt-note">Comme dans le gestionnaire des tâches : un programme désactivé ne se lance plus
+            avec Windows mais reste installé. Les programmes marqués « tous les utilisateurs » demandent une
+            confirmation de Windows.</p>
+        </div>
+
+        <!-- Mémoire -->
+        <div class="opt-pane" data-pane="memory" hidden>
+          <div class="panel" id="mem-panel">
+            <div class="mem-figure">
+              <div class="mem-value"><span id="mem-used">0</span><span class="mem-unit"> Go utilisés</span></div>
+              <div class="mem-sub"><span id="mem-total">0</span> Go au total · <span id="mem-free">0</span> Go libres</div>
+              <div class="mem-bar"><div class="mem-fill" id="mem-fill"></div></div>
+            </div>
+            <div class="btn-row" style="margin-top:20px">
+              <button class="btn primary" id="mem-optimize">Libérer la mémoire</button>
+              <span class="muted" id="mem-result"></span>
+            </div>
+          </div>
+          <h2>Nettoyage automatique</h2>
+          <div class="panel">
+            <label class="check"><input type="checkbox" id="mem-auto">
+              Libérer automatiquement la mémoire quand l'utilisation dépasse un seuil</label>
+            <div class="btn-row" style="margin-top:12px">
+              <label class="muted" style="font-size:13px">Seuil</label>
+              <input type="range" id="mem-threshold" min="50" max="95" value="80">
+              <span class="muted" id="mem-threshold-val" style="font-family:var(--font-mono)">80%</span>
+            </div>
+            <p class="muted" style="margin-top:10px;font-size:12.5px">
+              Vérification toutes les minutes, au plus un nettoyage toutes les 10 minutes.
+              L'application au premier plan (un jeu, par exemple) est épargnée pour ne pas la faire
+              saccader. La purge du cache système demande que Satella soit lancée en administrateur.</p>
+          </div>
+        </div>
+
+        <!-- Nettoyage -->
+        <div class="opt-pane" data-pane="clean" hidden>
+          <div class="panel">
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Fichiers temporaires</div>
+                <div class="setting-desc">Restes d'installations et de programmes dans le dossier temporaire de ta
+                  session. Seuls les fichiers de plus de 24 heures sont supprimés ; ceux encore utilisés sont
+                  laissés en place.</div>
+                <p class="muted opt-temp" id="opt-temp-info">—</p>
+              </div>
+              <button class="btn primary" id="opt-temp-clean" disabled>Supprimer</button>
+            </div>
+          </div>
         </div>
       </section>
 
