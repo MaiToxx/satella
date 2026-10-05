@@ -237,8 +237,8 @@ function showPage(name) {
   clearInterval(memTimer);
   memTimer = null;
   if (name === 'optimizer') {
-    refreshMemory();
-    memTimer = setInterval(refreshMemory, 2000);
+    showOptTab(optTab);
+    refreshTuning();
   } else if (name === 'settings') {
     refreshFootprint();
     refreshStatsInfo();
@@ -2238,6 +2238,11 @@ async function renderProfiles(payload) {
         <button class="btn small p-apps-save">Lier</button>
         <label class="check" title="Pratique pour les jeux : aucune abréviation ne se déclenche tant que ce profil est actif">
           <input type="checkbox" class="p-nosnip" ${pr.noSnippets ? 'checked' : ''}> Sans abréviations</label>
+        ${TUNING_AVAILABLE ? `<label class="check p-perf-wrap" title="Préréglage de l'Optimiseur appliqué quand ce profil devient actif ; en le quittant, retour au préréglage habituel">
+          Performances <select class="p-perf">
+            ${[['', 'inchangées'], ['game', 'Jeu'], ['balanced', 'Équilibré'], ['quiet', 'Silencieux et frais']]
+              .map(([v, l]) => `<option value="${v}" ${(pr.perf || '') === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></label>` : ''}
       </div>
       <div class="p-sched">
         <label class="check"><input type="checkbox" class="p-sched-on" ${pr.schedule ? 'checked' : ''}> Actif chaque jour de</label>
@@ -2259,6 +2264,13 @@ async function renderProfiles(payload) {
     const apps = row.querySelector('.p-apps-input').value.split(',');
     renderProfiles(await window.satella.profiles.setMeta(row.dataset.name, { apps }));
     toast('Applications liées au profil.');
+  }));
+  $$('.p-perf').forEach((sel) => sel.addEventListener('change', async (e) => {
+    const name = rowName(e);
+    const v = e.target.value;
+    renderProfiles(await window.satella.profiles.setMeta(name, { perf: v }));
+    toast(v ? `« ${name} » passera en préréglage « ${PRESET_LABELS[v]} » quand il sera actif.`
+      : `« ${name} » ne change plus les performances.`);
   }));
   $$('.p-nosnip').forEach((c) => c.addEventListener('change', async (e) => {
     const name = rowName(e);
@@ -2616,6 +2628,265 @@ $('#mem-threshold').addEventListener('input', (e) => {
 });
 $('#mem-threshold').addEventListener('change', (e) => {
   window.satella.settings.set({ autoOptimizeThreshold: +e.target.value });
+});
+
+/* ================= Optimiseur : réglages de performance ================= */
+let TUNING = null;             // dernier état lu côté Windows
+let TUNING_AVAILABLE = false;
+let tuningSeq = 0;
+let optTab = 'pc';
+try { optTab = localStorage.getItem('satella.optTab') || 'pc'; } catch { /* stockage indisponible */ }
+
+const PRESET_LABELS = { game: 'Jeu', balanced: 'Équilibré', quiet: 'Silencieux et frais' };
+const BOOST_LABELS = {
+  0: 'Désactivé (plus frais)', 1: 'Activé', 2: 'Agressif (par défaut)', 3: 'Activé (efficace)', 4: 'Agressif (efficace)',
+};
+const GPU_PREF_LABELS = ['Laisser Windows décider', 'Économie d\'énergie', 'Hautes performances'];
+const fmtBytes = (n) => (n >= GO ? `${(n / GO).toFixed(1).replace('.', ',')} Go`
+  : n >= 1048576 ? `${Math.round(n / 1048576)} Mo` : `${Math.max(0, Math.round(n / 1024))} Ko`);
+
+function showOptTab(tab) {
+  const btn = $(`#opt-tabs button[data-tab="${tab}"]`);
+  if (!btn || btn.hidden) tab = TUNING_AVAILABLE ? 'pc' : 'memory';
+  optTab = tab;
+  try { localStorage.setItem('satella.optTab', tab); } catch { /* stockage indisponible */ }
+  $$('#opt-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  $$('.opt-pane').forEach((pane) => { pane.hidden = pane.dataset.pane !== tab; });
+  // La mémoire n'est relue que pendant qu'elle est affichée
+  clearInterval(memTimer);
+  memTimer = null;
+  if (tab === 'memory' && currentPage === 'optimizer') {
+    refreshMemory();
+    memTimer = setInterval(refreshMemory, 2000);
+  }
+  if (tab === 'clean' && currentPage === 'optimizer') refreshTemp();
+}
+
+$('#opt-tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (b) showOptTab(b.dataset.tab);
+});
+
+async function refreshTuning() {
+  if (!TUNING_AVAILABLE) return;
+  const seq = ++tuningSeq;
+  let st;
+  try { st = await window.satella.tuning.probe(); } catch (err) { st = { available: true, error: err.message }; }
+  if (seq !== tuningSeq) return; // une lecture plus récente est en cours
+  TUNING = st;
+  renderTuning();
+}
+
+// Applique un réglage, signale le résultat puis relit l'état réel
+async function tuningAction(promise, okMsg) {
+  let res;
+  try { res = await promise; } catch (err) { res = { ok: false, error: err.message }; }
+  if (res && res.ok) {
+    if (okMsg) toast(typeof okMsg === 'function' ? okMsg(res) : okMsg);
+  } else {
+    toast('Impossible : ' + ((res && res.error) || 'erreur inconnue'), 4500);
+  }
+  await refreshTuning();
+  return res || {};
+}
+
+function pcName(hw) {
+  const maker = String(hw.maker || '').split(/\s+/)[0];
+  const model = String(hw.model || '');
+  if (!model) return maker || 'PC';
+  return maker && !fold(model).startsWith(fold(maker)) ? `${maker} ${model}` : model;
+}
+
+function renderTuning() {
+  const st = TUNING;
+  if (!st) return;
+  const err = $('#opt-error');
+  err.hidden = !st.error;
+  err.textContent = st.error ? `Certains réglages n'ont pas pu être lus : ${st.error}` : '';
+  const hw = st.hw || {};
+
+  // Ce PC
+  const gpus = (hw.gpus || []).join(' + ') || '—';
+  const rows = [
+    ['PC', pcName(hw)],
+    ['Processeur', hw.cpu || '—'],
+    ['Graphismes', gpus],
+    ['Mémoire', hw.ramGb ? `${hw.ramGb} Go` : '—'],
+    ['Alimentation', hw.laptop ? (hw.onBattery ? 'Sur batterie' : 'Sur secteur') : 'Secteur (PC fixe)'],
+    ['Windows', hw.build ? `Windows ${hw.build >= 22000 ? 11 : 10} (version ${hw.build})` : '—'],
+  ];
+  $('#opt-hw').innerHTML = `<div class="opt-hw-grid">${rows.map(([k, v]) => `
+    <div class="opt-hw-item"><span class="opt-hw-lbl">${esc(k)}</span><span>${esc(v)}</span></div>`).join('')}</div>`;
+  $$('#opt-presets .opt-preset').forEach((b) => {
+    b.classList.toggle('active', b.dataset.preset === st.preset);
+    b.classList.toggle('habitual', b.dataset.preset === st.habitual);
+  });
+  $('#opt-tips').innerHTML = (st.tips || []).map((t) => `<li>${esc(t.text)}</li>`).join('')
+    || '<li class="muted">Rien à signaler : ce PC est déjà bien réglé.</li>';
+
+  // Alimentation
+  const overlayOk = !!st.overlay;
+  $$('#opt-overlay button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.v === st.overlay);
+    b.disabled = !overlayOk || !st.overlayUsable;
+  });
+  const warn = $('#opt-overlay-warn');
+  const active = (st.plans || []).find((p) => p.guid === st.activePlan);
+  if (!overlayOk) {
+    warn.hidden = false;
+    warn.textContent = 'Réglage indisponible sur ce PC.';
+  } else if (!st.overlayUsable) {
+    warn.hidden = false;
+    warn.innerHTML = `Sans effet avec le mode de gestion « ${esc(active ? active.name : '?')} ». `
+      + '<button class="btn small" id="opt-back-balanced">Revenir à « Utilisation normale »</button>';
+  } else {
+    warn.hidden = true;
+  }
+  $('#opt-boost-row').hidden = !st.boost;
+  for (const [sel, v] of [['#opt-boost-ac', st.boost && st.boost.ac], ['#opt-boost-dc', st.boost && st.boost.dc]]) {
+    const vals = [0, 1, 2];
+    if (Number.isInteger(v) && !vals.includes(v)) vals.push(v);
+    $(sel).innerHTML = vals.map((x) => `<option value="${x}" ${x === v ? 'selected' : ''}>${esc(BOOST_LABELS[x] || `Valeur ${x}`)}</option>`).join('');
+  }
+  $('#opt-plan').innerHTML = (st.plans || []).map((p) => `<option value="${esc(p.guid)}" ${p.guid === st.activePlan ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  $('#opt-plan').disabled = !(st.plans || []).length;
+  $('#opt-ultimate').hidden = !st.canCreateUltimate;
+
+  // Jeux
+  $('#opt-gamemode').checked = !!st.gameMode;
+  $('#opt-dvr').checked = !!st.gameDvr;
+  $('#opt-hags').checked = !!st.hags;
+  $('#opt-windowed-row').hidden = st.windowed === null || st.windowed === undefined;
+  $('#opt-windowed').checked = !!st.windowed;
+  const integrated = (hw.gpus || []).filter((g) => /radeon(\(tm\))? graphics$|vega \d+ graphics|\d+m graphics|intel.*(uhd|hd|iris)/i.test(g));
+  const dedicated = (hw.gpus || []).filter((g) => !integrated.includes(g) && !/basic display|basic render|virtual/i.test(g));
+  $('#opt-gpu-hint').textContent = integrated.length && dedicated.length
+    ? `« Hautes performances » = ${dedicated[0]} (pour les jeux) · « Économie d'énergie » = ${integrated[0]}.`
+    : 'Choisis la carte graphique utilisée par un programme (utile surtout sur un portable à deux puces graphiques).';
+  $('#opt-gpu-list').innerHTML = (st.gpuApps || []).map((a) => `
+    <div class="opt-gpu-row" data-path="${esc(a.path)}">
+      <div class="opt-gpu-name"><span>${esc(a.name)}</span><span class="muted opt-cmd" title="${esc(a.path)}">${esc(a.path)}</span></div>
+      <select class="opt-gpu-pref">${GPU_PREF_LABELS.map((l, i) => `<option value="${i}" ${i === a.pref ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      <button class="btn small opt-gpu-del" title="Retirer de la liste (Windows décidera)">Retirer</button>
+    </div>`).join('') || '<p class="muted">Aucune application réglée pour l\'instant.</p>';
+
+  // Démarrage
+  const startup = st.startup || [];
+  const on = startup.filter((x) => x.enabled).length;
+  $('#opt-startup-sum').textContent = startup.length
+    ? `${on} programme${on > 1 ? 's' : ''} sur ${startup.length} se lance${on > 1 ? 'nt' : ''} avec Windows.`
+    : '';
+  $('#opt-startup').innerHTML = startup.map((x) => `
+    <div class="setting-row opt-st-row" data-id="${esc(x.id)}">
+      <div>
+        <div class="setting-name">${esc(x.label)}${x.machine ? ' <span class="tag tag-mouse">tous les utilisateurs</span>' : ''}</div>
+        <div class="setting-desc opt-cmd" title="${esc(x.command)}">${esc(x.command)}</div>
+      </div>
+      <label class="switch"><input type="checkbox" class="opt-st" ${x.enabled ? 'checked' : ''}><span></span></label>
+    </div>`).join('') || '<p class="muted">Aucun programme ne se lance avec Windows.</p>';
+}
+
+$('#opt-presets').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt-preset');
+  if (!b) return;
+  const id = b.dataset.preset;
+  tuningAction(window.satella.tuning.preset(id), `Préréglage « ${PRESET_LABELS[id]} » appliqué.`);
+});
+$('#opt-overlay').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-v]');
+  if (b && !b.disabled) tuningAction(window.satella.tuning.set('overlay', b.dataset.v), `Mode d'alimentation : ${b.textContent}.`);
+});
+$('#opt-overlay-warn').addEventListener('click', (e) => {
+  if (e.target.id !== 'opt-back-balanced' || !TUNING) return;
+  const BALANCED_PLAN = '381b4222-f694-41f0-9685-d5d57a8bd5c1';
+  if ((TUNING.plans || []).some((p) => p.guid === BALANCED_PLAN)) {
+    tuningAction(window.satella.tuning.set('plan', BALANCED_PLAN), 'Mode « Utilisation normale » activé.');
+  }
+});
+$('#opt-boost-ac').addEventListener('change', (e) => {
+  tuningAction(window.satella.tuning.set('boost', { ac: +e.target.value }), 'Turbo sur secteur réglé.');
+});
+$('#opt-boost-dc').addEventListener('change', (e) => {
+  tuningAction(window.satella.tuning.set('boost', { dc: +e.target.value }), 'Turbo sur batterie réglé.');
+});
+$('#opt-plan').addEventListener('change', (e) => {
+  const name = e.target.selectedOptions[0] ? e.target.selectedOptions[0].textContent : '';
+  tuningAction(window.satella.tuning.set('plan', e.target.value), `Mode « ${name} » activé.`);
+});
+$('#opt-ultimate').addEventListener('click', () => {
+  tuningAction(window.satella.tuning.createUltimate(), 'Mode « Performances optimales » ajouté et activé.');
+});
+for (const [sel, key, msgOn, msgOff] of [
+  ['#opt-gamemode', 'gameMode', 'Mode Jeu activé.', 'Mode Jeu désactivé.'],
+  ['#opt-dvr', 'gameDvr', 'Enregistrement Xbox activé.', 'Enregistrement Xbox désactivé.'],
+  ['#opt-windowed', 'windowed', 'Optimisations des jeux en fenêtre activées.', 'Optimisations des jeux en fenêtre désactivées.'],
+]) {
+  $(sel).addEventListener('change', (e) => {
+    tuningAction(window.satella.tuning.set(key, e.target.checked), e.target.checked ? msgOn : msgOff);
+  });
+}
+$('#opt-hags').addEventListener('change', async (e) => {
+  const res = await tuningAction(window.satella.tuning.set('hags', e.target.checked),
+    'Planification GPU modifiée : redémarre le PC pour l\'appliquer.');
+  if (res.ok && res.restart) $('#opt-hags-restart').hidden = false;
+});
+$('#opt-gpu-add').addEventListener('click', async () => {
+  const exe = await window.satella.tuning.pickExe();
+  if (!exe) return;
+  if (TUNING && (TUNING.gpuApps || []).some((a) => a.path.toLowerCase() === exe.toLowerCase())) {
+    return toast('Ce programme est déjà dans la liste.');
+  }
+  const name = exe.split(/[\\/]/).pop();
+  tuningAction(window.satella.tuning.gpuPref(exe, 2), `${name} utilisera la carte graphique la plus puissante.`);
+});
+$('#opt-gpu-list').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('opt-gpu-pref')) return;
+  const path = e.target.closest('.opt-gpu-row').dataset.path;
+  tuningAction(window.satella.tuning.gpuPref(path, +e.target.value), 'Carte graphique réglée.');
+});
+$('#opt-gpu-list').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('opt-gpu-del')) return;
+  const path = e.target.closest('.opt-gpu-row').dataset.path;
+  tuningAction(window.satella.tuning.gpuPref(path, null), 'Programme retiré : Windows choisira la carte graphique.');
+});
+$('#opt-startup').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('opt-st')) return;
+  const row = e.target.closest('.opt-st-row');
+  const label = row.querySelector('.setting-name').firstChild.textContent;
+  tuningAction(window.satella.tuning.startup(row.dataset.id, e.target.checked),
+    e.target.checked ? `${label} se lancera avec Windows.` : `${label} ne se lancera plus avec Windows.`);
+});
+
+async function refreshTemp() {
+  if (!TUNING_AVAILABLE) return;
+  const info = $('#opt-temp-info');
+  const btn = $('#opt-temp-clean');
+  info.textContent = 'Calcul en cours…';
+  btn.disabled = true;
+  let res;
+  try { res = await window.satella.tuning.tempInfo(); } catch { res = null; }
+  if (!res || res.ok === false) {
+    info.textContent = 'Lecture du dossier temporaire impossible.';
+    return;
+  }
+  info.textContent = res.files
+    ? `${fmtBytes(res.bytes)} dans ${res.files.toLocaleString('fr-FR')} fichier${res.files > 1 ? 's' : ''} à supprimer.`
+    : 'Rien à supprimer pour l\'instant.';
+  btn.disabled = !res.files;
+}
+$('#opt-temp-clean').addEventListener('click', async () => {
+  const btn = $('#opt-temp-clean');
+  btn.disabled = true;
+  $('#opt-temp-info').textContent = 'Suppression en cours…';
+  let res;
+  try { res = await window.satella.tuning.tempClean(); } catch (err) { res = { ok: false, error: err.message }; }
+  if (res && res.ok) {
+    toast(`${fmtBytes(res.freed)} libérés (${res.removed.toLocaleString('fr-FR')} fichiers)`
+      + (res.failed ? ` · ${res.failed} encore utilisés, laissés en place` : '') + '.', 4000);
+  } else {
+    toast('Impossible : ' + ((res && res.error) || 'erreur inconnue'), 4500);
+  }
+  refreshTemp();
 });
 
 /* ================= Paramètres ================= */
@@ -3067,6 +3338,14 @@ async function paletteCommands() {
     add('Action', 'Luminosité +', () => window.satella.runAction('brightUp'));
     add('Action', 'Luminosité −', () => window.satella.runAction('brightDown'));
   }
+  if (TUNING_AVAILABLE) {
+    Object.entries(PRESET_LABELS).forEach(([id, label]) => add('Performances', `Préréglage « ${label} »`, async () => {
+      const res = await window.satella.tuning.preset(id);
+      toast(res && res.ok ? `Préréglage « ${label} » appliqué.` : `Impossible : ${(res && res.error) || 'erreur inconnue'}`, res && res.ok ? 2500 : 4500);
+      if (currentPage === 'optimizer') refreshTuning();
+    }));
+    add('Performances', 'Supprimer les fichiers temporaires', () => { showPage('optimizer'); showOptTab('clean'); });
+  }
   add('Action', 'Profil suivant', () => window.satella.runAction('nextProfile'));
   add('Action', 'Arrêter toutes les macros et turbos', () => window.satella.runAction('stopAll'));
   [5, 15, 25, 45, 60].forEach((m) => add('Minuteur', `Minuteur ${m} min`, () => startTimer(m)));
@@ -3254,6 +3533,11 @@ async function init() {
   if (!data.memoryAvailable) {
     $('#mem-panel').innerHTML = '<p class="muted">Optimiseur indisponible sur ce système.</p>';
   }
+  // Réglages de performance : Windows seulement (onglet Mémoire sinon)
+  TUNING_AVAILABLE = !!data.tuningAvailable;
+  $$('#opt-tabs button').forEach((b) => { b.hidden = !TUNING_AVAILABLE && b.dataset.tab !== 'memory'; });
+  $('#opt-unavailable').hidden = TUNING_AVAILABLE;
+  showOptTab(optTab);
 
   buildKeyboard();
   buildMouse();
@@ -3331,6 +3615,14 @@ async function init() {
     else if (res.exe) toast(`Profil « ${res.name} » appliqué pour ${res.exe}.`);
     else if (res.schedule) toast(`Profil « ${res.name} » appliqué (horaire ${res.schedule.from} – ${res.schedule.to}).`);
     else toast(`Profil par défaut « ${res.name} » appliqué.`);
+  });
+  window.satella.tuning.onApplied((res) => {
+    if (!res) return;
+    const label = PRESET_LABELS[res.preset] || res.preset;
+    const who = res.profile ? `Profil « ${res.profile} » : préréglage` : 'Préréglage';
+    if (res.ok) toast(`${who} « ${label} » appliqué.`);
+    else toast(`${who} « ${label} » : ${res.error || 'échec'}`, 4500);
+    if (currentPage === 'optimizer') refreshTuning();
   });
   window.satella.memory.onAuto((res) => {
     if (res && res.ok && res.freed > 0) {

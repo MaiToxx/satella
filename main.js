@@ -23,6 +23,7 @@ const { LedEngine, DEFAULT_DEVICE_STATE, hexToRgb, TIMER_DONE_MS } = require('./
 const { DirectBackend } = require('./src/led/direct');
 const hid = require('./src/led/hid');
 const memory = require('./src/system/memory');
+const tuning = require('./src/system/tuning');
 const foreground = require('./src/system/foreground');
 const idle = require('./src/system/idle');
 const locks = require('./src/system/locks');
@@ -75,6 +76,9 @@ let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
 let lastAutoTarget = null;      // dernier profil choisi par la bascule automatique
+// Réglages de performance de Windows (page Optimiseur) ; null hors Windows
+const perf = tuning.createBackend();
+let perfFromProfile = false;    // le préréglage en place vient d'un profil
 let uiPage = 'home';
 let captureKind = null; // effet capturé en cours : 'audio' | 'screen' | null
 let shortcutErrors = [];
@@ -124,6 +128,7 @@ const DEFAULT_SETTINGS = {
   autoBackup: true,         // sauvegarde automatique quotidienne des données
   appShortcuts: {},         // raccourcis globaux de l'application : action -> accélérateur
   theme: 'dark',            // 'dark' | 'light' | 'system' (comme Windows)
+  perfPreset: 'balanced',   // préréglage de performance habituel (retour après un profil)
 };
 
 // Démarrage silencieux : Windows relance Satella avec ce drapeau
@@ -1034,6 +1039,35 @@ function applyProfile(p) {
   sessionState = { activeProfile: p.name, dirty: false };
   saveSession();
   rebuildTrayMenu();
+  profilePerf(p);
+}
+
+// Préréglage choisi à la main (Optimiseur, palette, zone de notification) :
+// il devient le préréglage habituel
+async function applyManualPreset(id) {
+  if (!perf || !tuning.PRESETS[id]) return { ok: false, error: 'préréglage inconnu' };
+  const res = await tuning.applyPreset(perf, id);
+  settings = { ...settings, perfPreset: id };
+  store.write('settings', settings);
+  perfFromProfile = false;
+  rebuildTrayMenu();
+  console.log(`[performances] préréglage « ${tuning.PRESETS[id].label} »` + (res.ok ? '' : ` : ${res.error}`));
+  return res;
+}
+
+// Préréglage de performance d'un profil (mode Jeu quand le jeu lié passe au
+// premier plan, par exemple). En quittant un tel profil pour un profil
+// sans préréglage, retour au préréglage habituel.
+function profilePerf(p) {
+  if (!perf) return;
+  const want = p.perf || (perfFromProfile ? settings.perfPreset : null);
+  perfFromProfile = !!p.perf;
+  if (!want || !tuning.PRESETS[want]) return;
+  tuning.applyPreset(perf, want).then((res) => {
+    console.log(`[performances] préréglage « ${tuning.PRESETS[want].label} » (profil ${p.name})`
+      + (res.ok ? '' : ` : ${res.error}`));
+    send('tuning:applied', { preset: want, profile: p.name, ok: res.ok, error: res.error || null });
+  }).catch((err) => console.log('[performances]', err.message));
 }
 
 function loadProfileByName(name) {
@@ -1523,6 +1557,7 @@ function setupIpc() {
     packaged: app.isPackaged,
     platform: process.platform,
     memoryAvailable: memory.available(),
+    tuningAvailable: !!perf,
     layout,
     ledState: ledEngine.state,
     dimmed: isDimmed(),
@@ -1722,6 +1757,50 @@ function setupIpc() {
   ipcMain.handle('memory:status', () => memory.readStatus());
   ipcMain.handle('memory:optimize', () => memory.optimize());
 
+  // ---- Optimiseur : réglages de performance de Windows ----
+  const noPerf = { ok: false, error: 'disponible sous Windows uniquement' };
+  ipcMain.handle('tuning:probe', async () => {
+    if (!perf) return { available: false };
+    const state = await perf.probe({ onBattery: powerMonitor.isOnBatteryPower() });
+    return { ...state, habitual: settings.perfPreset };
+  });
+  ipcMain.handle('tuning:set', async (e, key, value) => {
+    if (!perf) return noPerf;
+    const bool = value === true;
+    switch (key) {
+      case 'overlay': return perf.setOverlay(String(value));
+      case 'boost': {
+        const v = value && typeof value === 'object' ? value : {};
+        const pick = (x) => (Number.isInteger(x) && tuning.BOOST_MODES.includes(x) ? x : null);
+        return perf.setBoost(pick(v.ac), pick(v.dc));
+      }
+      case 'plan': return perf.setPlan(String(value));
+      case 'gameMode': return perf.setGameMode(bool);
+      case 'gameDvr': return perf.setGameDvr(bool);
+      case 'hags': return perf.setHags(bool);
+      case 'windowed': return perf.setWindowed(bool);
+      default: return { ok: false, error: 'réglage inconnu' };
+    }
+  });
+  ipcMain.handle('tuning:createUltimate', () => (perf ? perf.createUltimate() : noPerf));
+  ipcMain.handle('tuning:preset', (e, id) => (perf ? applyManualPreset(id) : noPerf));
+  ipcMain.handle('tuning:gpuPref', (e, exe, pref) => {
+    if (!perf) return noPerf;
+    return perf.setGpuPref(String(exe), pref === null ? null : Number(pref));
+  });
+  ipcMain.handle('tuning:pickExe', async () => {
+    if (perf && perf.pickExe) return perf.pickExe();
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Jeu ou application',
+      properties: ['openFile'],
+      filters: [{ name: 'Programmes', extensions: ['exe'] }],
+    });
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+  });
+  ipcMain.handle('tuning:startup', (e, id, enabled) => (perf ? perf.setStartup(String(id), enabled === true) : noPerf));
+  ipcMain.handle('tuning:tempInfo', () => (perf ? perf.tempInfo() : noPerf));
+  ipcMain.handle('tuning:tempClean', () => (perf ? perf.tempClean() : noPerf));
+
   // ---- Paramètres ----
   ipcMain.handle('settings:get', () => settings);
   // État réel côté Windows : l'utilisateur peut avoir désactivé l'entrée
@@ -1753,6 +1832,7 @@ function setupIpc() {
       isDefault: !!previous.isDefault,
       schedule: previous.schedule || null,
       noSnippets: !!previous.noSnippets,
+      perf: previous.perf || '',
     });
     store.write('profiles', profiles);
     sessionState = { activeProfile: name, dirty: false };
@@ -1793,6 +1873,7 @@ function setupIpc() {
     }
     if (meta.schedule !== undefined) p.schedule = sanitize.schedule(meta.schedule);
     if (meta.noSnippets !== undefined) p.noSnippets = !!meta.noSnippets;
+    if (meta.perf !== undefined) p.perf = sanitize.perfPreset(meta.perf);
     store.write('profiles', profiles);
     lastFgExe = ''; // réévaluer la bascule avec les nouvelles règles
     lastAutoTarget = null;
@@ -1920,6 +2001,17 @@ function rebuildTrayMenu() {
         },
       })),
     },
+    ...(perf ? [{
+      label: 'Performances',
+      submenu: Object.entries(tuning.PRESETS).map(([id, p]) => ({
+        label: p.label,
+        type: 'radio',
+        checked: settings.perfPreset === id,
+        click: () => applyManualPreset(id).then((res) => {
+          send('tuning:applied', { preset: id, profile: null, ok: res.ok, error: res.error || null });
+        }),
+      })),
+    }] : []),
     {
       label: 'Éteindre les LED',
       type: 'checkbox',

@@ -21,7 +21,8 @@ function launch(dataDir) {
   return electron.launch({
     executablePath: require('electron'),
     args: [APP, '--no-sandbox', '--disable-gpu'],
-    env: { ...process.env, SATELLA_USER_DATA: dataDir },
+    // Réglages de performance simulés (le moteur Windows n'existe pas ici)
+    env: { ...process.env, SATELLA_USER_DATA: dataDir, SATELLA_FAKE_TUNING: '1' },
   });
 }
 
@@ -319,6 +320,97 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.uncheck('.profile-row.active .p-nosnip');
     await sleep(300);
     check('abréviations réactivées', !(await pausedShown()));
+
+    // Optimiseur : réglages de performance (moteur Windows simulé)
+    const probe = () => page.evaluate(() => window.satella.tuning.probe());
+    await page.click('.nav-btn[data-page="optimizer"]');
+    await page.click('#opt-tabs button[data-tab="pc"]');
+    await page.waitForSelector('.opt-hw-grid');
+    check('optimiseur : PC détecté', (await page.textContent('#opt-hw')).includes('Dell G5 5505')
+      && (await page.textContent('#opt-tips')).includes('RX 5600M'));
+    check('optimiseur : préréglage reconnu', await page.isVisible('.opt-preset.active[data-preset="balanced"]'));
+    await page.click('.opt-preset[data-preset="quiet"]');
+    await sleep(400);
+    let tst = await probe();
+    check('préréglage silencieux', tst.preset === 'quiet' && tst.overlay === 'efficiency' && tst.boost.ac === 0
+      && tst.habitual === 'quiet' && await page.isVisible('.opt-preset.active[data-preset="quiet"]'));
+    await page.click('#opt-tabs button[data-tab="power"]');
+    await page.selectOption('#opt-boost-dc', '1');
+    await sleep(400);
+    tst = await probe();
+    check('turbo sur batterie', tst.boost.dc === 1 && tst.boost.ac === 0 && tst.preset === null);
+    await page.click('#opt-overlay button[data-v="performance"]');
+    await sleep(400);
+    check('mode d\'alimentation', (await probe()).overlay === 'performance'
+      && await page.isVisible('#opt-overlay button.active[data-v="performance"]'));
+    await page.click('#opt-ultimate');
+    await sleep(400);
+    tst = await probe();
+    check('performances optimales ajoutées', !tst.canCreateUltimate && !tst.overlayUsable
+      && await page.isVisible('#opt-back-balanced') && !(await page.isVisible('#opt-ultimate')));
+    await page.click('#opt-back-balanced');
+    await sleep(400);
+    check('retour à Utilisation normale', (await probe()).overlayUsable && !(await page.isVisible('#opt-back-balanced')));
+
+    await page.click('#opt-tabs button[data-tab="games"]');
+    await page.click('#opt-dvr + span');
+    await page.click('#opt-windowed + span');
+    await sleep(400);
+    tst = await probe();
+    check('jeux : enregistrement coupé, jeux en fenêtre', tst.gameDvr === false && tst.windowed === true);
+    await page.click('#opt-hags + span');
+    await sleep(400);
+    check('planification GPU : redémarrage signalé', (await probe()).hags && await page.isVisible('#opt-hags-restart'));
+    await page.click('#opt-gpu-add');
+    await sleep(400);
+    check('carte graphique : jeu ajouté en hautes performances', (await page.locator('.opt-gpu-row').count()) === 1
+      && (await page.inputValue('.opt-gpu-row .opt-gpu-pref')) === '2');
+    await page.selectOption('.opt-gpu-row .opt-gpu-pref', '1');
+    await sleep(400);
+    check('carte graphique : préférence changée', (await probe()).gpuApps[0].pref === 1);
+    await page.click('.opt-gpu-row .opt-gpu-del');
+    await sleep(400);
+    check('carte graphique : jeu retiré', (await page.locator('.opt-gpu-row').count()) === 0);
+
+    await page.click('#opt-tabs button[data-tab="startup"]');
+    check('démarrage : liste', (await page.locator('.opt-st-row').count()) === 3
+      && (await page.textContent('#opt-startup-sum')).includes('2 programmes sur 3'));
+    await page.click('.opt-st-row[data-id="hkcu:Discord"] .switch span');
+    await sleep(400);
+    check('démarrage : programme désactivé', (await probe()).startup.find((x) => x.name === 'Discord').enabled === false
+      && (await page.textContent('#opt-startup-sum')).includes('1 programme sur 3'));
+
+    await page.click('#opt-tabs button[data-tab="clean"]');
+    await page.waitForFunction(() => /Go dans/.test(document.getElementById('opt-temp-info').textContent));
+    await page.click('#opt-temp-clean');
+    await page.waitForFunction(() => /Rien à supprimer/.test(document.getElementById('opt-temp-info').textContent));
+    check('nettoyage : fichiers supprimés', await page.isDisabled('#opt-temp-clean')
+      && (await page.textContent('#toast')).includes('libérés'));
+    await page.click('#opt-tabs button[data-tab="memory"]');
+    check('onglet mémoire', await page.isVisible('#mem-panel'));
+
+    // Profil lié à un préréglage : appliqué à l'activation, puis retour au
+    // préréglage habituel en passant à un profil sans préréglage
+    await page.click('.nav-btn[data-page="profiles"]');
+    await page.selectOption('.profile-row[data-name="Bureau perso"] .p-perf', 'game');
+    await sleep(300);
+    check('profil : préréglage enregistré',
+      (await page.evaluate(() => window.satella.profiles.list())).profiles.find((p) => p.name === 'Bureau perso').perf === 'game');
+    await page.click('.profile-row[data-name="Bureau perso"] .p-load');
+    await sleep(600);
+    check('profil : préréglage Jeu appliqué', (await probe()).preset === 'game');
+    await page.click('.profile-row[data-name="Bureau perso"] .p-dup');
+    await sleep(300);
+    await page.selectOption('.profile-row[data-name="Bureau perso (copie)"] .p-perf', '');
+    await sleep(300);
+    await page.click('.profile-row[data-name="Bureau perso (copie)"] .p-load');
+    await sleep(600);
+    check('profil sans préréglage : retour à l\'habituel', (await probe()).preset === 'quiet');
+    await page.click('.profile-row[data-name="Bureau perso"] .p-load');
+    await sleep(300);
+    await page.selectOption('.profile-row[data-name="Bureau perso"] .p-perf', '');
+    await page.click('.profile-row[data-name="Bureau perso (copie)"] .p-del');
+    await sleep(300);
     await page.click('.profile-row[data-name="Bureau perso"] .p-dup');
     await sleep(300);
     check('profil dupliqué', (await page.locator('.profile-row[data-name="Bureau perso (copie)"]').count()) === 1);

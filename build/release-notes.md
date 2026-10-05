@@ -1,6 +1,11 @@
 ## Nouveautés
-- Tous les effets du clavier sont personnalisables : un nouveau panneau « Réglages de l'effet » apparaît sous les effets.
-  - Source des couleurs, selon l'effet : couleur unique, deux couleurs, palette (2 à 6 couleurs au choix) ou arc-en-ciel. Par exemple des flammes bleues, une vague aux couleurs de ta palette, une pluie multicolore ou une respiration qui change de couleur à chaque souffle.
-  - Réglages propres à chaque effet : profondeur de la respiration, largeur des bandes de la vague, durée et rayon de la lueur du réactif, épaisseur et portée de l'onde de choc, densité des étincelles et de la pluie, longueur des gouttes, hauteur des flammes, largeur du balayage, nombre de bras du tourbillon, touches allumées du disco, sensibilité du visualiseur audio, saturation de l'ambiance écran…
-  - Bouton « Réglages par défaut » pour revenir à l'effet d'origine. Les réglages sont enregistrés dans le profil actif.
-- Un effet natif (vague, respiration, réactif…) réglé autrement que par défaut est calculé par Satella et diffusé au clavier : Satella doit alors rester ouverte (même réduite dans la zone de notification).
+- L'Optimiseur devient une vraie boîte à outils de performance, en onglets :
+  - **Ce PC** : le matériel détecté (modèle, processeur, puces graphiques, mémoire, secteur ou batterie), trois préréglages en un clic (**Jeu**, **Équilibré**, **Silencieux et frais**) et des conseils adaptés au PC (portable à deux puces graphiques, processeurs Ryzen, cartes Radeon, portables Dell…).
+  - **Alimentation** : mode d'alimentation de Windows (économie / équilibré / performances), turbo du processeur réglable séparément sur secteur et sur batterie (le couper rend un portable bien plus frais et silencieux), mode de gestion de l'alimentation, avec l'ajout possible de « Performances optimales ».
+  - **Jeux** : Mode Jeu, enregistrement Xbox (Game DVR), optimisations des jeux en fenêtre (Windows 11), planification GPU à accélération matérielle, et **carte graphique par application** pour forcer un jeu à tourner sur la carte la plus puissante.
+  - **Démarrage** : les programmes lancés avec Windows, à activer ou désactiver comme dans le gestionnaire des tâches.
+  - **Mémoire** : l'optimiseur mémoire habituel.
+  - **Nettoyage** : suppression des fichiers temporaires de plus de 24 heures.
+- Profils : un profil peut appliquer un préréglage quand il devient actif (par exemple « Jeu » dès que le jeu lié passe au premier plan), puis le préréglage habituel revient.
+- Les préréglages sont aussi dans la palette de commandes (Ctrl+K) et dans le menu de la zone de notification.
+- Tous ces réglages utilisent uniquement les outils de Windows et restent réversibles. Ceux qui concernent tout le PC demandent une confirmation de Windows.

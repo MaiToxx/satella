@@ -114,6 +114,20 @@ contextBridge.exposeInMainWorld('satella', {
     onAuto: on('memory:auto'),
   },
 
+  // Réglages de performance de Windows (page Optimiseur)
+  tuning: {
+    probe: () => ipcRenderer.invoke('tuning:probe'),
+    set: (key, value) => ipcRenderer.invoke('tuning:set', key, value),
+    createUltimate: () => ipcRenderer.invoke('tuning:createUltimate'),
+    preset: (id) => ipcRenderer.invoke('tuning:preset', id),
+    gpuPref: (exe, pref) => ipcRenderer.invoke('tuning:gpuPref', exe, pref),
+    pickExe: () => ipcRenderer.invoke('tuning:pickExe'),
+    startup: (id, enabled) => ipcRenderer.invoke('tuning:startup', id, enabled),
+    tempInfo: () => ipcRenderer.invoke('tuning:tempInfo'),
+    tempClean: () => ipcRenderer.invoke('tuning:tempClean'),
+    onApplied: on('tuning:applied'),
+  },
+
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),
