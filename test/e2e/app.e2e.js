@@ -216,7 +216,7 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     await page.click('#kb-effects button[data-fx="sysmon"]');
     await sleep(1500);
     check('jauge système dessinée', !!(await page.evaluate(() =>
-      document.querySelector('.kb-key[data-id="f1"] .led').style.background)));
+      document.querySelector('.kb-key[data-id="f1"]').style.getPropertyValue('--c'))));
     await page.click('#kb-effects button[data-fx="screen"]');
     await sleep(2500);
     const frames = await page.evaluate(() => window.__satellaScreen.framesSent);
@@ -229,7 +229,7 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
       (await page.evaluate(() => window.__satellaScreen.framesSent)) === f1);
 
     // Coloration : couleur récente, annuler / rétablir, préréglage
-    const led = (id) => page.evaluate((k) => document.querySelector(`.kb-key[data-id="${k}"] .led`).style.background, id);
+    const led = (id) => page.evaluate((k) => document.querySelector(`.kb-key[data-id="${k}"]`).style.getPropertyValue('--c').replace(/\s/g, ''), id);
     check('couleur récente mémorisée', (await page.locator('#kb-recent .swatch').count()) >= 1);
     // (le sélecteur de couleur change aussi la couleur de base : on la
     // remet en vert ensuite pour distinguer la touche peinte du reste)
@@ -245,7 +245,7 @@ test('parcours complet de l’interface', { skip: !electron && 'playwright-core 
     const undone = await led('q');
     await page.keyboard.press('Control+y');
     await sleep(300);
-    check('annuler / rétablir la coloration', painted === 'rgb(255, 0, 0)' && undone === 'rgb(46, 232, 138)'
+    check('annuler / rétablir la coloration', painted === 'rgb(255,0,0)' && undone === 'rgb(46,232,138)'
       && (await led('q')) === painted, `${painted} / ${undone}`);
     await page.selectOption('#kb-preset', 'rows');
     await sleep(300);

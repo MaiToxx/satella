@@ -1,11 +1,9 @@
 ## Nouveautés
-- L'Optimiseur devient une vraie boîte à outils de performance, en onglets :
-  - **Ce PC** : le matériel détecté (modèle, processeur, puces graphiques, mémoire, secteur ou batterie), trois préréglages en un clic (**Jeu**, **Équilibré**, **Silencieux et frais**) et des conseils adaptés au PC (portable à deux puces graphiques, processeurs Ryzen, cartes Radeon, portables Dell…).
-  - **Alimentation** : mode d'alimentation de Windows (économie / équilibré / performances), turbo du processeur réglable séparément sur secteur et sur batterie (le couper rend un portable bien plus frais et silencieux), mode de gestion de l'alimentation, avec l'ajout possible de « Performances optimales ».
-  - **Jeux** : Mode Jeu, enregistrement Xbox (Game DVR), optimisations des jeux en fenêtre (Windows 11), planification GPU à accélération matérielle, et **carte graphique par application** pour forcer un jeu à tourner sur la carte la plus puissante.
-  - **Démarrage** : les programmes lancés avec Windows, à activer ou désactiver comme dans le gestionnaire des tâches.
-  - **Mémoire** : l'optimiseur mémoire habituel.
-  - **Nettoyage** : suppression des fichiers temporaires de plus de 24 heures.
-- Profils : un profil peut appliquer un préréglage quand il devient actif (par exemple « Jeu » dès que le jeu lié passe au premier plan), puis le préréglage habituel revient.
-- Les préréglages sont aussi dans la palette de commandes (Ctrl+K) et dans le menu de la zone de notification.
-- Tous ces réglages utilisent uniquement les outils de Windows et restent réversibles. Ceux qui concernent tout le PC demandent une confirmation de Windows.
+- Nouvelle apparence : fonds plus profonds, panneaux en relief, navigation éclairée par la couleur de tes LED, touches du clavier en relief avec une lueur RGB par-dessous, cartes et boutons retravaillés. Thème clair refait aussi.
+
+## Plus léger
+- Satella consomme beaucoup moins quand elle tourne en arrière-plan : le moteur d'effets ne se réveille plus que lorsqu'une image doit vraiment être calculée (environ 10 fois moins de réveils du processeur, utile sur un portable sur batterie).
+- Avec « Démarrer réduit », l'interface n'est plus chargée tant que tu n'ouvres pas la fenêtre : plusieurs centaines de Mo de mémoire en moins dans la zone de notification.
+- La page Clavier utilise nettement moins de processeur pendant les effets animés.
+- Détection des périphériques USB plus légère, flux vers le clavier sans interrogation en continu, captures audio/écran arrêtées quand personne ne les voit, statistiques de frappe enregistrées moins souvent.
+- Une deuxième ouverture de Satella se ferme aussitôt, sans charger ses modules.

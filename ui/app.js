@@ -392,7 +392,6 @@ function onKeyClick(id, e) {
 function refreshSelection() {
   keyEls.forEach((el) => {
     el.classList.toggle('selected', kbSelection.has(el.dataset.id));
-    setKeyVisual(el, lastFrame && lastFrame.keyboard[el.dataset.id]);
   });
   $('#kb-sel-count').textContent = kbSelection.size;
 }
@@ -891,32 +890,34 @@ function buildHomePreviews() {
 }
 
 // Halo lumineux de la touche (diffusion des LEDs) + anneau de sélection
+// Couleur LED d'une touche : une seule variable CSS (la lueur et le halo en
+// découlent dans la feuille de style) ; rien n'est touché si elle n'a pas
+// changé depuis l'image précédente.
 function setKeyVisual(el, rgb) {
-  const parts = [];
-  if (el.classList.contains('selected')) parts.push('0 0 0 1px #fff inset');
-  if (rgb) {
-    const lum = rgb[0] + rgb[1] + rgb[2];
-    if (lum > 45) parts.push(`0 0 ${Math.round(6 + lum / 55)}px 1px rgba(${rgb[0]},${rgb[1]},${rgb[2]},.5)`);
-  }
-  el.style.boxShadow = parts.join(', ');
+  if (!rgb) return;
+  const css = rgbCss(rgb);
+  if (el._c === css) return;
+  el._c = css;
+  el.style.setProperty('--c', css);
+  el.classList.toggle('lit', rgb[0] + rgb[1] + rgb[2] > 45);
 }
-
+function setSpanColor(el, rgb) {
+  const css = rgbCss(rgb);
+  if (el._c !== css) { el._c = css; el.style.background = css; }
+}
 function applyFrame(frame) {
   lastFrame = frame;
   if (currentPage === 'keyboard') {
     for (const el of keyEls) {
-      const rgb = frame.keyboard[el.dataset.id];
-      if (!rgb) continue;
-      el.firstElementChild.style.background = rgbCss(rgb);
-      setKeyVisual(el, rgb);
+      setKeyVisual(el, frame.keyboard[el.dataset.id]);
     }
   }
   if (currentPage === 'mouse') {
     $$('.mouse-zone').forEach((el) => {
       const rgb = frame.mouse[el.dataset.zone];
       if (rgb && el.dataset.zone) {
-        el.style.fill = rgbCss(rgb);
-        el.style.filter = `drop-shadow(0 0 6px ${rgbCss(rgb)})`;
+        const css = rgbCss(rgb);
+        if (el._c !== css) { el._c = css; el.style.fill = css; }
       }
     });
   }
@@ -926,12 +927,12 @@ function applyFrame(frame) {
     for (let i = 0; i < kbSpans.length; i++) {
       const key = keysList[Math.floor((i / kbSpans.length) * keysList.length)];
       const rgb = frame.keyboard[key.id];
-      if (rgb) kbSpans[i].style.background = rgbCss(rgb);
+      if (rgb) setSpanColor(kbSpans[i], rgb);
     }
     const msSpans = $('#home-mouse-preview').children;
     LAYOUT.mouse.forEach((z, i) => {
       const rgb = frame.mouse[z.id];
-      if (rgb && msSpans[i]) msSpans[i].style.background = rgbCss(rgb);
+      if (rgb && msSpans[i]) setSpanColor(msSpans[i], rgb);
     });
   }
 }
@@ -946,6 +947,7 @@ const audioViz = (() => {
   let data = null;
   let timer = null;
   let starting = false;
+  let wanted = false; // un arrêt pendant le démarrage doit l'emporter
   let warned = false;
 
   function report(msg) {
@@ -955,20 +957,24 @@ const audioViz = (() => {
   }
 
   async function start() {
+    wanted = true;
     if (stream || starting) return;
     starting = true;
+    let s;
     try {
       // La vidéo est imposée par l'API : réduite au minimum et désactivée
-      stream = await navigator.mediaDevices.getDisplayMedia({
+      s = await navigator.mediaDevices.getDisplayMedia({
         audio: true,
-        video: { width: 320, height: 180, frameRate: 1 },
+        video: { width: 160, height: 90, frameRate: 1 },
       });
     } catch (err) {
       starting = false;
-      report('capture du son impossible (' + err.message + ')');
+      if (wanted) report('capture du son impossible (' + err.message + ')');
       return;
     }
     starting = false;
+    if (!wanted) { s.getTracks().forEach((t) => t.stop()); return; }
+    stream = s;
     stream.getVideoTracks().forEach((t) => { t.enabled = false; });
     if (!stream.getAudioTracks().length) {
       report('aucun son capturé (disponible sous Windows uniquement)');
@@ -1003,6 +1009,7 @@ const audioViz = (() => {
   }
 
   function stop() {
+    wanted = false;
     clearInterval(timer);
     timer = null;
     if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -1026,6 +1033,7 @@ const screenViz = (() => {
   let ctx = null;
   let timer = null;
   let starting = false;
+  let wanted = false;
   let warned = false;
   const W = 160;
   const H = 90;
@@ -1038,19 +1046,24 @@ const screenViz = (() => {
   }
 
   async function start() {
+    wanted = true;
     if (stream || starting) return;
     starting = true;
+    let s;
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
+      // Capturée directement à la taille analysée (pas de réduction coûteuse)
+      s = await navigator.mediaDevices.getDisplayMedia({
         audio: false,
-        video: { width: 640, height: 360, frameRate: 10 },
+        video: { width: W, height: H, frameRate: 10 },
       });
     } catch (err) {
       starting = false;
-      report('capture de l\'écran impossible (' + err.message + ')');
+      if (wanted) report('capture de l\'écran impossible (' + err.message + ')');
       return;
     }
     starting = false;
+    if (!wanted) { s.getTracks().forEach((t) => t.stop()); return; }
+    stream = s;
     warned = false;
     video = document.createElement('video');
     video.muted = true;
@@ -1092,6 +1105,7 @@ const screenViz = (() => {
   }
 
   function stop() {
+    wanted = false;
     clearInterval(timer);
     timer = null;
     if (stream) stream.getTracks().forEach((t) => t.stop());

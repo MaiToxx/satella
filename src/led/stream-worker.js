@@ -58,13 +58,29 @@ function sameChunk(a, b, start, len) {
   return true;
 }
 
+// Réveils à la demande (pas d'interrogation toutes les 15 ms) : une image
+// reçue réveille la pompe, sinon elle ne se réveille que pour l'entretien.
+let sleepTimer = null;
+let immediate = null;
+
+function schedule(ms) {
+  if (sleepTimer || immediate) return;
+  sleepTimer = setTimeout(() => { sleepTimer = null; pump(); }, ms);
+}
+
+function wake() {
+  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null; }
+  if (!immediate) immediate = setImmediate(() => { immediate = null; pump(); });
+}
+
 function pump() {
-  if (!running) return;
-  // Entretien toutes les 300 ms au plus : au-delà, le clavier quitte le
-  // mode dynamique et raffiche son effet enregistré (LED fantômes).
-  if (paused || (!latest && Date.now() - lastWriteAt < 300)) {
-    setTimeout(pump, 15);
-    return;
+  if (!running || paused) return; // en pause : « resume » réveillera la pompe
+  if (!latest) {
+    if (!lastWritten) return; // rien encore à entretenir : on attend une image
+    // Entretien toutes les 300 ms au plus : au-delà, le clavier quitte le
+    // mode dynamique et raffiche son effet enregistré (LED fantômes).
+    const wait = 300 - (Date.now() - lastWriteAt);
+    if (wait > 0) { schedule(wait); return; }
   }
   try {
     if (latest) {
@@ -82,13 +98,11 @@ function pump() {
     } else {
       // Entretien : réécrit l'image complète pour rester en mode dynamique
       // (et retomber sur un tampon cohérent si le clavier avait décroché)
-      if (lastWritten) {
-        for (let i = 0; i < lastWritten.length; i += 54) {
-          const len = Math.min(54, lastWritten.length - i);
-          writeChunk(i, lastWritten.slice(i, i + len));
-        }
-        lastWriteAt = Date.now();
+      for (let i = 0; i < lastWritten.length; i += 54) {
+        const len = Math.min(54, lastWritten.length - i);
+        writeChunk(i, lastWritten.slice(i, i + len));
       }
+      lastWriteAt = Date.now();
     }
   } catch (err) {
     parentPort.postMessage({ type: 'error', message: err.message });
@@ -96,13 +110,14 @@ function pump() {
     try { dev.close(); } catch { /* déjà fermé */ }
     return;
   }
-  setImmediate(pump);
+  wake(); // une image a pu arriver pendant l'écriture
 }
 
 parentPort.on('message', (msg) => {
   switch (msg.type) {
     case 'frame':
       latest = msg.data;
+      wake();
       break;
     case 'pause':
       paused = true;
@@ -112,9 +127,11 @@ parentPort.on('message', (msg) => {
       drain();
       lastWritten = null; // tout réécrire après une pause (l'état a pu changer)
       paused = false;
+      wake();
       break;
     case 'stop':
       running = false;
+      if (sleepTimer) clearTimeout(sleepTimer);
       try { dev.close(); } catch { /* déjà fermé */ }
       process.exit(0);
       break;

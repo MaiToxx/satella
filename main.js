@@ -6,6 +6,23 @@ const {
   app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, nativeImage,
   powerMonitor, dialog, shell, clipboard, screen, session, desktopCapturer, Notification, nativeTheme,
 } = require('electron');
+const path = require('path');
+
+// Dossier de données séparé (tests, version de développement lancée à
+// côté de la version installée) : SATELLA_USER_DATA=<dossier>
+if (process.env.SATELLA_USER_DATA) app.setPath('userData', path.resolve(process.env.SATELLA_USER_DATA));
+
+// Une seule instance : un deuxième lancement (raccourci, démarrage de
+// Windows) réaffiche simplement la fenêtre existante au lieu de piloter
+// le même clavier en parallèle. Vérifié avant de charger les modules
+// natifs : une deuxième instance se ferme aussitôt.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  console.log('Satella tourne déjà (zone de notification) : sa fenêtre est réaffichée. '
+    + 'Pour lancer une version de développement à côté, utilise un autre dossier de données : SATELLA_USER_DATA=<dossier>.');
+  app.quit();
+}
+
 const { autoUpdater } = require('electron-updater');
 
 // Mise à jour automatique via les releases GitHub du dépôt MaiToxx/satella
@@ -16,7 +33,6 @@ autoUpdater.autoInstallOnAppQuit = true;
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
-const path = require('path');
 const { Store } = require('./src/store');
 const logger = require('./src/system/logger');
 const { LedEngine, DEFAULT_DEVICE_STATE, hexToRgb, TIMER_DONE_MS } = require('./src/led/engine');
@@ -35,20 +51,6 @@ const keys = require('./src/macros/keys');
 const layout = require('./src/shared/layout');
 const sanitize = require('./src/shared/sanitize');
 const { inTimeWindow, autoProfileFor } = require('./src/system/schedule');
-
-// Dossier de données séparé (tests, version de développement lancée à
-// côté de la version installée) : SATELLA_USER_DATA=<dossier>
-if (process.env.SATELLA_USER_DATA) app.setPath('userData', path.resolve(process.env.SATELLA_USER_DATA));
-
-// Une seule instance : un deuxième lancement (raccourci, démarrage de
-// Windows) réaffiche simplement la fenêtre existante au lieu de piloter
-// le même clavier en parallèle.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  console.log('Satella tourne déjà (zone de notification) : sa fenêtre est réaffichée. '
-    + 'Pour lancer une version de développement à côté, utilise un autre dossier de données : SATELLA_USER_DATA=<dossier>.');
-  app.quit();
-}
 
 let win = null;
 let tray = null;
@@ -75,6 +77,18 @@ let keyStats = { counts: {}, total: 0, since: null, days: {} };
 let sysmonTimer = null;
 let lastCpu = null;
 let lastFgExe = '';
+let keyStatsTimer = null;
+
+// Statistiques de frappe : écrites au plus une fois par minute (pas de copie
+// ni de minuterie relancée à chaque frappe) ; écrites aussi en quittant
+function saveKeyStatsLater() {
+  if (keyStatsTimer) return;
+  keyStatsTimer = setTimeout(() => {
+    keyStatsTimer = null;
+    store.write('key-stats', keyStats);
+  }, 60000);
+}
+let engineTimer = null;
 let lastAutoTarget = null;      // dernier profil choisi par la bascule automatique
 // Réglages de performance de Windows (page Optimiseur) ; null hors Windows
 const perf = tuning.createBackend();
@@ -154,8 +168,31 @@ function saveBounds() {
   store.writeLater('window', { ...win.getNormalBounds(), maximized: win.isMaximized() }, 1000);
 }
 
-function createWindow() {
+// Fenêtre créée à la demande : avec « Démarrer réduit », l'interface n'est
+// chargée qu'à la première ouverture (ou pour une capture audio / écran),
+// ce qui épargne la mémoire du moteur de rendu tant qu'elle est cachée.
+let bootDone = false;
+let displayMediaReady = false;
+let rendererReady = false;
+let pendingPalette = false;
+let lastUpdateOffer = null;      // mise à jour proposée pendant que la fenêtre n'existait pas
+
+function ensureWindow({ show }) {
+  if (win && !win.isDestroyed()) {
+    if (show) revealWindow();
+    return win;
+  }
+  if (!displayMediaReady) {
+    setupDisplayMedia();
+    displayMediaReady = true;
+  }
+  createWindow({ show });
+  return win;
+}
+
+function createWindow({ show = true } = {}) {
   const b = savedBounds() || {};
+  rendererReady = false;
   win = new BrowserWindow({
     width: Math.max(1080, b.width || 1280),
     height: Math.max(680, b.height || 820),
@@ -172,12 +209,13 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // La capture audio (effet visualiseur) doit continuer fenêtre cachée
-      backgroundThrottling: false,
+      // Ralenti quand la fenêtre est cachée ; désactivé à la demande pendant
+      // une capture audio ou écran (applyThrottling)
+      backgroundThrottling: true,
     },
   });
   if (b.maximized) win.maximize();
-  if (!startedHidden) win.once('ready-to-show', () => win.show());
+  if (show) win.once('ready-to-show', () => { win.show(); win.focus(); });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
   // Aucune navigation ni fenêtre externe depuis l'interface
@@ -200,6 +238,14 @@ function createWindow() {
   };
   win.on('resize', queueBounds);
   win.on('move', queueBounds);
+  // Aperçu affiché ou non : la minuterie du moteur suit
+  for (const ev of ['show', 'hide', 'minimize', 'restore']) {
+    win.on(ev, () => {
+      if (!ledEngine) return;
+      ledEngine.refresh();
+      updateCapture();
+    });
+  }
 
   win.webContents.on('did-finish-load', () => {
     if (ledEngine) ledEngine.renderOnce();
@@ -240,7 +286,10 @@ function createWindow() {
 }
 
 function revealWindow() {
-  if (!win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed()) {
+    if (bootDone) ensureWindow({ show: true });
+    return;
+  }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
@@ -362,7 +411,10 @@ function setupEngines() {
     profileChanged();
   });
 
-  direct.on('status', (s) => send('devices:direct', s));
+  direct.on('status', (s) => {
+    send('devices:direct', s);
+    updateCapture(); // clavier branché ou perdu : la capture sert-elle encore ?
+  });
   direct.on('log', (msg) => console.log('[direct]', msg));
   // Périphérique (re)branché : lui réécrire l'état courant
   direct.on('connected', (device) => {
@@ -382,7 +434,9 @@ function setupEngines() {
   let pendingLCtrl = null;
   const deliverKey = (key) => {
     ledEngine.keyActivity(key);
-    send('macro:key-activity', { key });
+    // L'interface n'écoute les frappes que pendant la calibration ou le
+    // visualiseur de touches : inutile de la réveiller à chaque frappe sinon
+    if (calibrating || hookDebug) send('macro:key-activity', { key });
   };
   macroEngine.on('key-activity', ({ key, down, shift, ctrl, alt, meta }) => {
     if (!down || !key) return;
@@ -393,7 +447,7 @@ function setupEngines() {
       if (!keyStats.since) keyStats.since = new Date().toISOString();
       countKeyDay(keyStats.days);
       keyStats.hours = countKeyHour(keyStats.hours);
-      store.writeLater('key-stats', keyStats, 5000);
+      saveKeyStatsLater();
     }
     // Expansion de texte : uniquement la frappe naturelle de l'utilisateur
     // (pas pendant un enregistrement, une calibration, une macro ou un turbo)
@@ -446,6 +500,9 @@ function applySettings() {
   // --- Éclairage ---
   if (settings.ledsEnabled) {
     ledEngine.start();
+    // Filet de sécurité : la minuterie 30 img/s n'est armée qu'à la
+    // demande ; une vérification par seconde rattrape tout changement manqué
+    if (!engineTimer) engineTimer = setInterval(() => ledEngine.refresh(), 1000);
     direct.detect();
     applyLeds();
     if (!detectTimer) {
@@ -455,6 +512,8 @@ function applySettings() {
     }
   } else {
     ledEngine.stop();
+    clearInterval(engineTimer);
+    engineTimer = null;
     clearInterval(detectTimer);
     detectTimer = null;
     direct.dispose();
@@ -602,7 +661,7 @@ function refreshShortcuts() {
 // Abréviations en pause dans le profil actif (option du profil, pour les jeux)
 function snippetsPaused() {
   if (!sessionState.activeProfile) return false;
-  const p = store.read('profiles', []).find((x) => x.name === sessionState.activeProfile);
+  const p = store.peek('profiles', []).find((x) => x.name === sessionState.activeProfile);
   return !!(p && p.noSnippets);
 }
 
@@ -616,7 +675,14 @@ const APP_ACTIONS = {
   stopAll: { label: 'tout arrêter', run: () => { macroEngine.stop(); stopAllTurbos(); } },
   timer: { label: 'minuteur', run: () => (timer ? stopTimer() : startTimer(settings.timerMinutes)) },
   // Depuis n'importe quelle application : Satella s'affiche, palette ouverte
-  palette: { label: 'palette de commandes', run: () => { revealWindow(); send('palette:open'); } },
+  palette: {
+    label: 'palette de commandes',
+    run: () => {
+      revealWindow();
+      if (rendererReady) send('palette:open');
+      else pendingPalette = true; // interface en cours de chargement
+    },
+  },
 };
 
 function registerAppShortcuts() {
@@ -935,8 +1001,21 @@ function updateSysmon() {
 // spectre 30 fois/s) et l'ambiance écran (couleurs de l'écran 10 fois/s).
 const CAPTURE_EFFECTS = { audio: '__satellaAudio', screen: '__satellaScreen' };
 
+// Fenêtre cachée : le moteur de rendu est ralenti par Chromium, sauf
+// pendant une capture (le visualiseur doit continuer à tourner)
+function applyThrottling() {
+  if (win && !win.isDestroyed()) win.webContents.setBackgroundThrottling(!captureKind);
+}
+
 function startCaptureInRenderer() {
-  if (!win || win.isDestroyed() || !captureKind) return;
+  applyThrottling();
+  if (!captureKind) return;
+  if (!win || win.isDestroyed()) {
+    // La capture tourne dans l'interface : la créer (cachée) s'il le faut ;
+    // son chargement relancera la capture (did-finish-load)
+    if (bootDone) ensureWindow({ show: false });
+    return;
+  }
   const obj = CAPTURE_EFFECTS[captureKind];
   // userGesture = true : getDisplayMedia exige une action utilisateur
   win.webContents.executeJavaScript(`window.${obj} && window.${obj}.start()`, true)
@@ -945,7 +1024,10 @@ function startCaptureInRenderer() {
 
 function updateCapture() {
   const eff = ledEngine.state.keyboard.effect;
-  const want = settings.ledsEnabled && !isDimmed() && CAPTURE_EFFECTS[eff] ? eff : null;
+  // Capturer n'a de sens que si quelqu'un voit le résultat : le clavier
+  // branché, ou la fenêtre affichée (n'importe quelle page)
+  const consumer = !!direct.kb || !!(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized());
+  const want = settings.ledsEnabled && !isDimmed() && consumer && CAPTURE_EFFECTS[eff] ? eff : null;
   if (want === captureKind) return;
   if (captureKind) send('capture:stop', captureKind);
   captureKind = want;
@@ -1088,11 +1170,12 @@ function foregroundTick() {
     lastFgExe = exe;
     lastAutoTarget = null;
   }
-  const pick = autoProfileFor(store.read('profiles', []), lastFgExe);
+  // Toutes les 3 s : lecture sans copie ; une vraie copie seulement pour basculer
+  const pick = autoProfileFor(store.peek('profiles', []), lastFgExe);
   if (!pick || pick.profile.name === lastAutoTarget) return;
   lastAutoTarget = pick.profile.name;
   if (pick.profile.name === sessionState.activeProfile) return;
-  applyProfile(pick.profile);
+  applyProfile(store.read('profiles', []).find((x) => x.name === pick.profile.name) || pick.profile);
   send('profiles:autoApplied', {
     name: pick.profile.name,
     exe: pick.reason === 'app' ? lastFgExe : null,
@@ -1195,6 +1278,7 @@ async function backgroundUpdateCheck() {
         console.log('[mise à jour] téléchargement impossible :', err.message);
       });
     } else {
+      lastUpdateOffer = info;
       send('update:available', info);
     }
   } catch { /* hors ligne ou GitHub injoignable : silencieux */ }
@@ -1516,7 +1600,15 @@ function diagnosticText() {
 // ------------------------------------------------------------------- IPC --
 
 function setupIpc() {
-  ipcMain.handle('app:ready', () => { ledEngine.renderOnce(); return true; });
+  ipcMain.handle('app:ready', () => {
+    rendererReady = true;
+    ledEngine.renderOnce();
+    // Ce qui est arrivé avant que l'interface existe
+    if (pendingPalette) { pendingPalette = false; send('palette:open'); }
+    if (updateReadyVersion) send('update:ready', { version: updateReadyVersion, auto: !!settings.autoInstallUpdates });
+    else if (lastUpdateOffer) send('update:available', lastUpdateOffer);
+    return true;
+  });
 
   ipcMain.handle('app:checkUpdate', async () => {
     const current = app.getVersion();
@@ -1592,6 +1684,7 @@ function setupIpc() {
   ipcMain.on('ui:page', (e, page) => {
     uiPage = String(page || '');
     if (previewVisible()) ledEngine.renderOnce();
+    ledEngine.refresh();
   });
 
   // ---- LEDs ----
@@ -2073,8 +2166,8 @@ app.whenReady().then(() => {
     setupUpdater();
     setupIpc();
     setupPowerEvents();
-    setupDisplayMedia();
-    createWindow();
+    bootDone = true;
+    if (!startedHidden || captureKind) ensureWindow({ show: !startedHidden });
     createTray();
   } catch (err) {
     console.error('Démarrage impossible :', err && err.stack ? err.stack : err);
@@ -2097,6 +2190,7 @@ app.on('will-quit', () => {
   stopTimer({ silent: true });
   globalShortcut.unregisterAll();
   if (profileSyncTimer) syncActiveProfile();
+  if (keyStatsTimer) { clearTimeout(keyStatsTimer); store.write('key-stats', keyStats); }
   store.flush();
   if (macroEngine) macroEngine.dispose();
   if (direct) direct.dispose();
