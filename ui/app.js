@@ -238,12 +238,15 @@ function showPage(name) {
   memTimer = null;
   if (name === 'optimizer') {
     showOptTab(optTab);
-    refreshTuning();
   } else if (name === 'settings') {
     refreshFootprint();
     refreshStatsInfo();
     refreshBackups();
     syncStartupState();
+  } else if (name === 'devices' && !hidLoaded) {
+    // Liste USB complète : lue seulement quand la page est ouverte
+    hidLoaded = true;
+    window.satella.devices.refreshHid().then(renderHidList).catch(() => { hidLoaded = false; });
   } else if (name === 'profiles' && pendingProfiles) {
     renderProfiles(pendingProfiles);
   }
@@ -2147,8 +2150,13 @@ function renderDirectPanel(status) {
   `;
 }
 
+let hidLoaded = false;
 function renderHidList(hid) {
   const p = $('#hid-list');
+  if (!hid) {
+    p.innerHTML = '<p class="muted">Détection…</p>';
+    return;
+  }
   if (!hid.available) {
     p.innerHTML = `<p class="muted">Détection USB indisponible : ${esc(hid.error || '')}</p>`;
     return;
@@ -2648,6 +2656,7 @@ $('#mem-threshold').addEventListener('change', (e) => {
 let TUNING = null;             // dernier état lu côté Windows
 let TUNING_AVAILABLE = false;
 let tuningSeq = 0;
+let tuningAt = 0;
 let optTab = 'pc';
 try { optTab = localStorage.getItem('satella.optTab') || 'pc'; } catch { /* stockage indisponible */ }
 
@@ -2674,6 +2683,10 @@ function showOptTab(tab) {
     memTimer = setInterval(refreshMemory, 2000);
   }
   if (tab === 'clean' && currentPage === 'optimizer') refreshTemp();
+  // Lecture des réglages de Windows (PowerShell) : seulement pour les onglets
+  // qui les affichent, et pas plus d'une fois toutes les 30 s
+  if (currentPage === 'optimizer' && ['pc', 'power', 'games', 'startup'].includes(tab)
+    && (!TUNING || Date.now() - tuningAt > 30000)) refreshTuning();
 }
 
 $('#opt-tabs').addEventListener('click', (e) => {
@@ -2688,6 +2701,7 @@ async function refreshTuning() {
   try { st = await window.satella.tuning.probe(); } catch (err) { st = { available: true, error: err.message }; }
   if (seq !== tuningSeq) return; // une lecture plus récente est en cours
   TUNING = st;
+  tuningAt = Date.now();
   renderTuning();
 }
 

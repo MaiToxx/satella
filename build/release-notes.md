@@ -1,9 +1,6 @@
-## Nouveautés
-- Nouvelle apparence : fonds plus profonds, panneaux en relief, navigation éclairée par la couleur de tes LED, touches du clavier en relief avec une lueur RGB par-dessous, cartes et boutons retravaillés. Thème clair refait aussi.
-
-## Plus léger
-- Satella consomme beaucoup moins quand elle tourne en arrière-plan : le moteur d'effets ne se réveille plus que lorsqu'une image doit vraiment être calculée (environ 10 fois moins de réveils du processeur, utile sur un portable sur batterie).
-- Avec « Démarrer réduit », l'interface n'est plus chargée tant que tu n'ouvres pas la fenêtre : environ 150 à 300 Mo de mémoire en moins tant que Satella reste dans la zone de notification.
-- La page Clavier utilise nettement moins de processeur pendant les effets animés.
-- Détection des périphériques USB plus légère, flux vers le clavier sans interrogation en continu, captures audio/écran arrêtées quand personne ne les voit, statistiques de frappe enregistrées moins souvent.
-- Une deuxième ouverture de Satella se ferme aussitôt, sans charger ses modules.
+## Nouveautés (encore plus léger)
+- Page Clavier : l'aperçu animé utilise environ deux fois moins de processeur et de mémoire qu'avant (lueur des touches simplifiée, même rendu).
+- Démarrage environ 20 % plus rapide : le module de mise à jour n'est chargé qu'à la première vérification, et la liste complète des périphériques USB seulement à l'ouverture de la page Périphériques (sans bloquer l'application).
+- L'écoute globale du clavier s'arrête quand l'effet réactif est géré par le clavier lui-même et que personne ne regarde l'aperçu.
+- L'optimiseur mémoire travaille dans un thread à part : Satella ne se fige plus pendant un nettoyage.
+- Optimiseur : les réglages de Windows ne sont relus que pour les onglets qui les affichent, au plus toutes les 30 secondes.

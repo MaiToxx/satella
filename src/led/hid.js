@@ -10,11 +10,12 @@ try {
   hidError = err;
 }
 
-function listDevices() {
+// Énumération hors du fil principal (devicesAsync) quand node-hid le permet
+async function listDevices() {
   if (!HID) return { available: false, error: hidError && hidError.message, devices: [] };
   let devices = [];
   try {
-    devices = HID.devices();
+    devices = typeof HID.devicesAsync === 'function' ? await HID.devicesAsync() : HID.devices();
   } catch (err) {
     return { available: true, error: err.message, devices: [] };
   }
