@@ -3,6 +3,15 @@
 Application de bureau pour gérer l'éclairage du clavier **SURMEN GS98** et de la
 souris **Risophy PC365A**, avec un éditeur de macros avancé.
 
+## Performances
+
+Satella est pensée pour rester ouverte toute la journée dans la zone de
+notification : le moteur d'effets ne calcule d'images que si l'aperçu est
+affiché ou si le clavier reçoit un effet en flux continu ; avec « Démarrer
+réduit », l'interface n'est chargée qu'à la première ouverture ; la détection
+USB est filtrée par identifiant et l'interface n'est prévenue que des
+changements ; les captures audio / écran s'arrêtent quand personne ne les voit.
+
 ## Installer et lancer
 
 Version distribuée : installe `Satella-Setup-X.Y.Z.exe` (releases GitHub du

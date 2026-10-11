@@ -58,6 +58,14 @@ class Store {
     return clone(data);
   }
 
+  // Lecture sans copie, pour les lectures fréquentes qui ne modifient rien
+  // (le résultat ne doit JAMAIS être modifié ni conservé)
+  peek(name, fallback) {
+    if (this.cache.has(name)) return this.cache.get(name);
+    this.read(name, fallback);
+    return this.cache.has(name) ? this.cache.get(name) : fallback;
+  }
+
   write(name, data) {
     clearTimeout(this.pending.get(name));
     this.pending.delete(name);

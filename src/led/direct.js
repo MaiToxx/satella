@@ -155,8 +155,13 @@ class DirectBackend extends EventEmitter {
 
   detect() {
     if (!HID) return this.status();
+    // Énumération filtrée par identifiant (bien moins coûteuse qu'une
+    // énumération complète, répétée toutes les quelques secondes)
     let devices = [];
-    try { devices = HID.devices(); } catch { return this.status(); }
+    try {
+      if (!this.kb) devices.push(...HID.devices(KB_VID, KB_PID));
+      if (!this.mouse) for (const pid of MOUSE_PIDS) devices.push(...HID.devices(MOUSE_VID, pid));
+    } catch { return this.status(); }
 
     // Après un échec d'initialisation, on attend une minute avant de
     // réessayer (pas d'ouverture/sondage/journal toutes les 5 s)
@@ -205,8 +210,18 @@ class DirectBackend extends EventEmitter {
       }
     }
 
-    this.emit('status', this.status());
-    return this.status();
+    return this._emitStatus();
+  }
+
+  // L'interface n'est prévenue que si l'état des périphériques a changé
+  _emitStatus() {
+    const st = this.status();
+    const sig = JSON.stringify(st);
+    if (sig !== this._lastStatusSig) {
+      this._lastStatusSig = sig;
+      this.emit('status', st);
+    }
+    return st;
   }
 
   // Un périphérique perdu oublie le dernier état écrit : à la reconnexion,
@@ -220,14 +235,14 @@ class DirectBackend extends EventEmitter {
     this.kbStreaming = false;
     this._lastKbSig = '';
     this._lastConfigSig = '';
-    this.emit('status', this.status());
+    this._emitStatus();
   }
 
   dropMouse() {
     try { if (this.mouse) this.mouse.close(); } catch { /* ignore */ }
     this.mouse = null;
     this._lastMouseSig = '';
-    this.emit('status', this.status());
+    this._emitStatus();
   }
 
   // Force la réécriture complète au prochain apply*()

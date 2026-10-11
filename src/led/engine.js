@@ -8,6 +8,10 @@ const { fxSettings } = require('../shared/effects');
 
 const FPS = 30;
 
+const ANIMATED = new Set(['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
+  'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
+  'sysmon', 'audio', 'screen', 'heatmap', 'palette']);
+
 function hexToRgb(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
   if (!m) return [255, 255, 255];
@@ -148,7 +152,9 @@ class LedEngine extends EventEmitter {
     // clavier, inutile de calculer 30 images/s (remplacé par main.js)
     this.wantFrames = () => true;
     this._frameCount = 0;
-    this.start();
+    // Minuterie à la demande : armée seulement quand une image doit être
+    // calculée (effet animé, minuteur ou flash, avec quelqu'un qui regarde)
+    this.enabled = false;
   }
 
   setDeviceState(device, patch) {
@@ -311,19 +317,35 @@ class LedEngine extends EventEmitter {
   }
 
   start() {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), 1000 / FPS);
+    this.enabled = true;
+    this.refresh();
   }
 
   stop() {
+    this.enabled = false;
     clearInterval(this.timer);
     this.timer = null;
   }
 
+  // Arme ou coupe la minuterie selon le besoin réel. À rappeler quand l'état,
+  // l'affichage ou le flux vers le clavier change (main.js le fait aussi
+  // chaque seconde par sécurité).
+  refresh() {
+    const kb = this.state.keyboard;
+    const flashing = this.flashState && Date.now() - this.flashState.t0 < this.flashState.ms + 100;
+    const need = this.enabled && (flashing
+      || ((ANIMATED.has(kb.effect) || !!this.timerState || ANIMATED.has(this.state.mouse.effect)) && this.wantFrames()));
+    if (need && !this.timer) {
+      this._lastTick = 0; // reprise : pas de saut d'animation
+      this.timer = setInterval(() => this.tick(), 1000 / FPS);
+    } else if (!need && this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
   isAnimated(effect) {
-    return ['breathing', 'wave', 'rainbow', 'reactive', 'sparkle',
-      'ripple', 'fire', 'rain', 'scanner', 'spiral', 'disco', 'gradient',
-      'sysmon', 'audio', 'screen', 'heatmap', 'palette'].includes(effect);
+    return ANIMATED.has(effect);
   }
 
   tick() {
@@ -338,9 +360,15 @@ class LedEngine extends EventEmitter {
     // Un flash en cours (ou qui vient de finir) doit être dessiné puis effacé
     const flashing = this.flashState && now - this.flashState.t0 < this.flashState.ms + 100;
     if (!flashing) this.flashState = null;
-    if (!kbAnim && !msAnim && !flashing) return; // statique : rien à recalculer
+    if (!kbAnim && !msAnim && !flashing) { // statique : rien à recalculer
+      if (this.timer) this.refresh();
+      return;
+    }
     this.t += dt;
-    if (!this.wantFrames() && !flashing) return; // personne ne regarde
+    if (!this.wantFrames() && !flashing) { // personne ne regarde
+      if (this.timer) this.refresh();
+      return;
+    }
     this.renderOnce();
   }
 
@@ -350,6 +378,7 @@ class LedEngine extends EventEmitter {
       mouse: this.computeMouse(),
     };
     this.emit('frame', frame);
+    this.refresh(); // un changement d'état peut demander (ou rendre inutile) l'animation
   }
 
   computeKeyboard() {
