@@ -257,15 +257,15 @@ h2 {
   display: flex;
   cursor: pointer;
   overflow: hidden;
+  contain: layout paint;
 }
 /* Lueur de la LED : couleur dans --c, posée par l'interface image par image */
 .kb-key .led {
   position: absolute; inset: 0; pointer-events: none;
-  background:
-    radial-gradient(120% 90% at 50% 100%, var(--c), transparent 75%),
-    linear-gradient(180deg, transparent, color-mix(in srgb, var(--c) 35%, transparent));
-  opacity: .95;
-  mix-blend-mode: screen;
+  /* un seul dégradé, sans mélange de calques : moins à repeindre par image */
+  background: radial-gradient(120% 95% at 50% 100%, var(--c), transparent 78%);
+  opacity: .92;
+  contain: strict;
 }
 .kb-key.lit { border-color: color-mix(in srgb, var(--c) 55%, var(--key-line)); }
 .kb-key .lbl {

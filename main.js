@@ -23,13 +23,20 @@ if (!gotLock) {
   app.quit();
 }
 
-const { autoUpdater } = require('electron-updater');
-
 // Mise à jour automatique via les releases GitHub du dépôt MaiToxx/satella
 // (configuré dans package.json, section build.publish). Publier une version :
 // bump de version, puis `npx electron-builder --win --publish always`.
-autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = true;
+// Module chargé à la première vérification (pas au démarrage).
+let _updater = null;
+function updater() {
+  if (!_updater) {
+    _updater = require('electron-updater').autoUpdater;
+    _updater.autoDownload = false;
+    _updater.autoInstallOnAppQuit = true;
+    attachUpdaterEvents(_updater);
+  }
+  return _updater;
+}
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -244,6 +251,7 @@ function createWindow({ show = true } = {}) {
       if (!ledEngine) return;
       ledEngine.refresh();
       updateCapture();
+      if (macroEngine) updateHookNeed();
     });
   }
 
@@ -414,6 +422,7 @@ function setupEngines() {
   direct.on('status', (s) => {
     send('devices:direct', s);
     updateCapture(); // clavier branché ou perdu : la capture sert-elle encore ?
+    updateHookNeed();
   });
   direct.on('log', (msg) => console.log('[direct]', msg));
   // Périphérique (re)branché : lui réécrire l'état courant
@@ -847,6 +856,7 @@ function refreshLiveLayers() {
   const live = ledEngine.hasLiveLayers();
   if (live === liveLayers) return;
   liveLayers = live;
+  updateHookNeed();
   if (settings.ledsEnabled && !isDimmed()) direct.applyKeyboard(hwState('keyboard'));
 }
 
@@ -904,6 +914,7 @@ function setDim(reason, on) {
   else if (was && !now) reapplyLeds();
   if (was !== now) {
     updateCapture();
+    updateHookNeed();
     rebuildTrayMenu();
     send('leds:dimmed', { dimmed: now, reasons: [...dimReasons] });
   }
@@ -1197,6 +1208,28 @@ function idleTick() {
   else if (ms < threshold && dimReasons.has('idle')) setDim('idle', false);
 }
 
+// Optimisation mémoire dans un thread dédié (une seule à la fois ; repli sur
+// le fil principal si le thread ne démarre pas)
+let optInFlight = null;
+function runOptimize(opts = {}) {
+  if (optInFlight) return optInFlight;
+  optInFlight = new Promise((resolve) => {
+    let worker;
+    try {
+      const { Worker } = require('worker_threads');
+      worker = new Worker(path.join(__dirname, 'src', 'system', 'memory-worker.js'), { workerData: opts });
+    } catch {
+      resolve(memory.optimize(opts));
+      return;
+    }
+    const timer = setTimeout(() => { worker.terminate(); resolve({ ok: false, error: 'délai dépassé' }); }, 30000);
+    worker.once('message', (res) => { clearTimeout(timer); resolve(res); worker.terminate(); });
+    worker.once('error', (err) => { clearTimeout(timer); resolve({ ok: false, error: err.message }); });
+    worker.once('exit', () => { clearTimeout(timer); resolve({ ok: false, error: 'interrompu' }); });
+  }).finally(() => { optInFlight = null; });
+  return optInFlight;
+}
+
 // Nettoyage mémoire automatique : au plus une fois toutes les 10 minutes,
 // en épargnant l'application au premier plan (un jeu ne doit pas saccader)
 function autoOptimizeTick() {
@@ -1205,8 +1238,7 @@ function autoOptimizeTick() {
   if (!st || st.load < settings.autoOptimizeThreshold) return;
   lastAutoOpt = Date.now();
   const fgPid = foreground.currentPid();
-  const res = memory.optimize({ excludePids: [fgPid, process.pid] });
-  send('memory:auto', res);
+  runOptimize({ excludePids: [fgPid, process.pid] }).then((res) => send('memory:auto', res));
 }
 
 function setupPowerEvents() {
@@ -1227,7 +1259,11 @@ function setupPowerEvents() {
 // effet réactif ou onde de choc, enregistrement de macro, calibration.
 function updateHookNeed() {
   const eff = ledEngine.state.keyboard.effect;
-  const forLeds = settings.ledsEnabled && (eff === 'reactive' || eff === 'ripple');
+  // Réactif / onde : les frappes ne servent que si quelqu'un voit le résultat
+  // (aperçu affiché ou effet calculé par Satella) ; le réactif du clavier
+  // lui-même ne dépend pas de cette écoute
+  const forLeds = settings.ledsEnabled && !isDimmed() && (eff === 'reactive' || eff === 'ripple')
+    && (previewVisible() || streamingKeyboard());
   const forMacros = settings.macrosEnabled && (macroEngine.recording || snippetEngine.active || holdTurbos().length > 0);
   const needed = forLeds || forMacros || calibrating || hookDebug || settings.keyStats
     || macroEngine.waitingForKey;
@@ -1244,7 +1280,7 @@ function notesText(releaseNotes) {
   return raw.replace(/<[^>]+>/g, '').slice(0, 20000);
 }
 
-function setupUpdater() {
+function attachUpdaterEvents(autoUpdater) {
   autoUpdater.on('download-progress', (p) => {
     send('update:progress', { percent: Math.round(p.percent) });
   });
@@ -1267,13 +1303,13 @@ function setupUpdater() {
 async function backgroundUpdateCheck() {
   if (!app.isPackaged || !settings.autoCheckUpdates || updateReadyVersion || updateDownloading) return;
   try {
-    const r = await autoUpdater.checkForUpdates();
-    if (!r || !r.updateInfo || autoUpdater.currentVersion.compare(r.updateInfo.version) >= 0) return;
+    const r = await updater().checkForUpdates();
+    if (!r || !r.updateInfo || updater().currentVersion.compare(r.updateInfo.version) >= 0) return;
     const info = { latest: r.updateInfo.version, notes: notesText(r.updateInfo.releaseNotes) };
     if (settings.autoInstallUpdates) {
       updateDownloading = true;
       console.log('[mise à jour] téléchargement automatique de la version', info.latest);
-      autoUpdater.downloadUpdate().catch((err) => {
+      updater().downloadUpdate().catch((err) => {
         updateDownloading = false;
         console.log('[mise à jour] téléchargement impossible :', err.message);
       });
@@ -1572,9 +1608,9 @@ async function importData({ file = null, trusted = false } = {}) {
   };
 }
 
-function diagnosticText() {
+async function diagnosticText() {
   const ids = (d) => `${d.vid}:${d.pid}`;
-  const hidInfo = hid.listDevices();
+  const hidInfo = await hid.listDevices();
   const st = direct.status();
   const lines = [
     `Satella ${app.getVersion()} — Electron ${process.versions.electron}, Node ${process.versions.node}`,
@@ -1616,10 +1652,10 @@ function setupIpc() {
       return { ok: false, current, error: 'version de développement (pas de mise à jour)' };
     }
     try {
-      const result = await autoUpdater.checkForUpdates();
+      const result = await updater().checkForUpdates();
       const latest = result && result.updateInfo ? result.updateInfo.version : current;
       const newer = !!(result && result.updateInfo)
-        && autoUpdater.currentVersion.compare(result.updateInfo.version) < 0;
+        && updater().currentVersion.compare(result.updateInfo.version) < 0;
       const notes = newer ? notesText(result.updateInfo.releaseNotes) : '';
       return { ok: true, current, latest, newer, notes };
     } catch (err) {
@@ -1630,7 +1666,7 @@ function setupIpc() {
   ipcMain.handle('app:downloadUpdate', async () => {
     try {
       updateDownloading = true;
-      await autoUpdater.downloadUpdate();
+      await updater().downloadUpdate();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -1638,8 +1674,9 @@ function setupIpc() {
   });
 
   ipcMain.handle('app:installUpdate', () => {
+    const u = updater();
     quitting = true;
-    autoUpdater.quitAndInstall();
+    u.quitAndInstall();
     return true;
   });
 
@@ -1659,7 +1696,7 @@ function setupIpc() {
     shortcutErrors,
     ...profilesPayload(),
     direct: direct.status(),
-    hid: hid.listDevices(),
+    hid: null, // liste chargée à l'ouverture de la page Périphériques
     capabilities: {
       input: input.available,
       inputError: input.loadError ? input.loadError.message : null,
@@ -1672,8 +1709,8 @@ function setupIpc() {
     keyLabels: Object.fromEntries(KEY_NAMES.map((k) => [k, keys.labelFor(k)])),
   }));
 
-  ipcMain.handle('app:diagnostic', () => {
-    const text = diagnosticText();
+  ipcMain.handle('app:diagnostic', async () => {
+    const text = await diagnosticText();
     clipboard.writeText(text);
     return text;
   });
@@ -1685,6 +1722,7 @@ function setupIpc() {
     uiPage = String(page || '');
     if (previewVisible()) ledEngine.renderOnce();
     ledEngine.refresh();
+    updateHookNeed();
   });
 
   // ---- LEDs ----
@@ -1700,7 +1738,7 @@ function setupIpc() {
 
   // ---- Périphériques ----
   ipcMain.handle('devices:refreshHid', () => {
-    direct.detect();
+    if (!direct.kb || !direct.mouse) direct.detect();
     return hid.listDevices();
   });
   ipcMain.handle('devices:directStatus', () => direct.status());
@@ -1848,16 +1886,28 @@ function setupIpc() {
 
   // ---- Optimiseur mémoire ----
   ipcMain.handle('memory:status', () => memory.readStatus());
-  ipcMain.handle('memory:optimize', () => memory.optimize());
+  ipcMain.handle('memory:optimize', () => runOptimize());
 
   // ---- Optimiseur : réglages de performance de Windows ----
   const noPerf = { ok: false, error: 'disponible sous Windows uniquement' };
-  ipcMain.handle('tuning:probe', async () => {
+  // Lectures simultanées regroupées (une seule sonde PowerShell à la fois)
+  // (jamais une lecture lancée avant une modification : elle serait périmée)
+  let probing = null;
+  let probingGen = -1;
+  let tuneWrites = 0;
+  const wrote = (p) => { tuneWrites++; return Promise.resolve(p).finally(() => { tuneWrites++; }); };
+  ipcMain.handle('tuning:probe', () => {
     if (!perf) return { available: false };
-    const state = await perf.probe({ onBattery: powerMonitor.isOnBatteryPower() });
-    return { ...state, habitual: settings.perfPreset };
+    if (!probing || probingGen !== tuneWrites) {
+      probingGen = tuneWrites;
+      const p = perf.probe({ onBattery: powerMonitor.isOnBatteryPower() })
+        .finally(() => { if (probing === p) probing = null; });
+      probing = p;
+    }
+    return probing.then((state) => ({ ...state, habitual: settings.perfPreset }));
   });
-  ipcMain.handle('tuning:set', async (e, key, value) => {
+  ipcMain.handle('tuning:set', (e, key, value) => wrote(setTuning(key, value)));
+  const setTuning = async (key, value) => {
     if (!perf) return noPerf;
     const bool = value === true;
     switch (key) {
@@ -1874,12 +1924,12 @@ function setupIpc() {
       case 'windowed': return perf.setWindowed(bool);
       default: return { ok: false, error: 'réglage inconnu' };
     }
-  });
-  ipcMain.handle('tuning:createUltimate', () => (perf ? perf.createUltimate() : noPerf));
-  ipcMain.handle('tuning:preset', (e, id) => (perf ? applyManualPreset(id) : noPerf));
+  };
+  ipcMain.handle('tuning:createUltimate', () => (perf ? wrote(perf.createUltimate()) : noPerf));
+  ipcMain.handle('tuning:preset', (e, id) => (perf ? wrote(applyManualPreset(id)) : noPerf));
   ipcMain.handle('tuning:gpuPref', (e, exe, pref) => {
     if (!perf) return noPerf;
-    return perf.setGpuPref(String(exe), pref === null ? null : Number(pref));
+    return wrote(perf.setGpuPref(String(exe), pref === null ? null : Number(pref)));
   });
   ipcMain.handle('tuning:pickExe', async () => {
     if (perf && perf.pickExe) return perf.pickExe();
@@ -1890,7 +1940,7 @@ function setupIpc() {
     });
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
   });
-  ipcMain.handle('tuning:startup', (e, id, enabled) => (perf ? perf.setStartup(String(id), enabled === true) : noPerf));
+  ipcMain.handle('tuning:startup', (e, id, enabled) => (perf ? wrote(perf.setStartup(String(id), enabled === true)) : noPerf));
   ipcMain.handle('tuning:tempInfo', () => (perf ? perf.tempInfo() : noPerf));
   ipcMain.handle('tuning:tempClean', () => (perf ? perf.tempClean() : noPerf));
 
@@ -2133,7 +2183,7 @@ function rebuildTrayMenu() {
     { type: 'separator' },
     ...(updateReadyVersion ? [{
       label: `Installer la version ${updateReadyVersion} et redémarrer`,
-      click: () => { quitting = true; autoUpdater.quitAndInstall(); },
+      click: () => { const u = updater(); quitting = true; u.quitAndInstall(); },
     }] : []),
     { label: 'Quitter', click: () => { quitting = true; app.quit(); } },
   ];
@@ -2163,7 +2213,6 @@ app.whenReady().then(() => {
   // garderait le verrou d'instance unique (plus aucun lancement possible)
   try {
     setupEngines();
-    setupUpdater();
     setupIpc();
     setupPowerEvents();
     bootDone = true;
